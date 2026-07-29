@@ -26,7 +26,6 @@ from pydantic_ai.capabilities._deferred_capability_loader import DeferredCapabil
 
 from .. import (
     _agent_graph,
-    _cancel,
     _instructions,
     _output,
     _system_prompt,
@@ -45,7 +44,7 @@ from .._agent_graph import (
     build_run_context,
     capture_run_messages,
 )
-from .._cancel import CancellationToken
+from .._cancel import CancellationToken, RunCancellation, take_run_binding
 from .._deferred_capabilities import parse_loaded_capabilities
 from .._instructions import AgentInstructions
 from .._output import OutputToolset
@@ -1112,7 +1111,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
         # Consume the pending `AgentRunEvents` binding before ANY user-supplied code (capability /
         # toolset `for_run()` hooks below) runs in this context: a hook that starts a nested agent
         # run would otherwise consume it and attach the outer handle to the wrong run.
-        binding = _cancel.take_run_binding()
+        binding = take_run_binding()
 
         # A bare `int` overrides both budgets; a partial `retries={'tools': ...}` / `{'output': ...}`
         # dict overrides only the named budget for this run (riding `ToolManager.default_max_retries`).
@@ -1633,7 +1632,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
             tracer=tracer,
             get_instructions=get_instructions,
             instrumentation_settings=instrumentation_settings,
-            cancellation=binding.cancellation if binding is not None else _cancel.RunCancellation(),
+            cancellation=binding.cancellation if binding is not None else RunCancellation(),
         )
 
         user_prompt_node = _agent_graph.UserPromptNode[AgentDepsT](

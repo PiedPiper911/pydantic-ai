@@ -730,6 +730,13 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
     `None` (default) inherits the agent's retry count at runtime. Set explicitly to override.
     """
 
+    use_tasks: bool
+    """Whether tools with optional task support use task-augmented execution.
+
+    Defaults to `True`. Tools that require task-augmented execution always use it, while tools that
+    forbid it never do.
+    """
+
     cache_tools: bool
     """Whether to cache the list of tools across `get_tools()` calls.
 
@@ -818,6 +825,7 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         max_retries: int | None = None,
         tool_error_behavior: Literal['retry', 'error', 'failed'] = 'retry',
         process_tool_call: ProcessToolCallback | None = None,
+        use_tasks: bool = True,
         cache_tools: bool = True,
         cache_resources: bool = True,
         cache_prompts: bool = True,
@@ -857,6 +865,8 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
                 [`ToolFailed`][pydantic_ai.exceptions.ToolFailed] so the model can see the error.
             process_tool_call: Hook to wrap tool calls. See
                 [`ProcessToolCallback`][pydantic_ai.mcp.ProcessToolCallback].
+            use_tasks: Whether tools with optional task support use task-augmented execution.
+                Tools that require task-augmented execution always use it.
             cache_tools: Whether to cache the list of tools. See
                 [`MCPToolset.cache_tools`][pydantic_ai.mcp.MCPToolset.cache_tools].
             cache_resources: Whether to cache the list of resources. See
@@ -978,6 +988,7 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         self.max_retries = max_retries
         self.tool_error_behavior = tool_error_behavior
         self.process_tool_call = process_tool_call
+        self.use_tasks = use_tasks
         self.cache_tools = cache_tools
         self.cache_resources = cache_resources
         self.cache_prompts = cache_prompts
@@ -1150,7 +1161,7 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
                     metadata={
                         'meta': mcp_tool.meta,
                         'annotations': mcp_tool.annotations.model_dump() if mcp_tool.annotations else None,
-                        'task': task_support in ('required', 'optional'),
+                        'task': task_support == 'required' or (task_support == 'optional' and self.use_tasks),
                     },
                     return_schema=mcp_tool.outputSchema or None,
                     include_return_schema=self.include_return_schema,
@@ -1275,8 +1286,8 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         ctx: RunContext[Any],
         tool: ToolsetTool[Any],
     ) -> Any:
-        # Server-side task-augmented execution per MCP SEP-1686 is governed entirely by the tool's
-        # `execution.taskSupport`: 'required'/'optional' → task path; 'forbidden' or absent → regular path.
+        # `get_tools()` resolves the server's `execution.taskSupport` and the client's `use_tasks`
+        # preference into the effective task path for this tool.
         use_task = bool((tool.tool_def.metadata or {}).get('task'))
         if self.process_tool_call is not None:
             return await self.process_tool_call(

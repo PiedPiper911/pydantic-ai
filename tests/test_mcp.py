@@ -41,7 +41,7 @@ with try_import() as imports_successful:
     )
     from fastmcp.exceptions import ToolError
     from fastmcp.prompts import Message
-    from fastmcp.server import FastMCP
+    from fastmcp.server import Context, FastMCP
     from fastmcp.server.tasks import TaskConfig
     from mcp import types as mcp_types
     from mcp.shared.exceptions import McpError
@@ -1507,9 +1507,7 @@ def test_construction_does_not_emit_warnings(recwarn: Any) -> None:
 
 class TestMCPToolsetBackgroundTasks:
     """SEP-1686 task-augmented execution. `MCPToolset` reads each tool's server-declared
-    `execution.taskSupport` and routes the call accordingly:
-    `'required'` and `'optional'` go through `client.call_tool(task=True)` -> `tool_task.result()`,
-    while `'forbidden'`/absent stay on the regular sync path."""
+    `execution.taskSupport` and routes the call according to the client's task preference."""
 
     @pytest.fixture
     async def task_server(self) -> FastMCP[None]:
@@ -1522,10 +1520,16 @@ class TestMCPToolsetBackgroundTasks:
             return 'task_required_completed'
 
         @server.tool(task=TaskConfig(mode='optional'))
-        async def task_optional_tool() -> str:
+        async def task_optional_tool(ctx: Context) -> str:
             """A tool that may run either as a task or synchronously."""
             await asyncio.sleep(0)
-            return 'task_optional_completed'
+            mode = 'task' if ctx.is_background_task else 'sync'
+            return f'task_optional_{mode}'
+
+        @server.tool(task=TaskConfig(mode='forbidden'))
+        async def task_forbidden_tool() -> str:
+            """A tool that forbids task-augmented execution."""
+            return 'task_forbidden_completed'
 
         @server.tool()
         async def plain_tool() -> str:
@@ -1544,14 +1548,26 @@ class TestMCPToolsetBackgroundTasks:
 
         assert (tools['task_required_tool'].tool_def.metadata or {}).get('task') is True
         assert (tools['task_optional_tool'].tool_def.metadata or {}).get('task') is True
+        assert (tools['task_forbidden_tool'].tool_def.metadata or {}).get('task') is False
+        assert (tools['plain_tool'].tool_def.metadata or {}).get('task') is False
+
+    async def test_disabling_tasks_only_changes_optional_task_metadata(
+        self, task_server: FastMCP[None], run_context: RunContext[None]
+    ) -> None:
+        toolset = MCPToolset(task_server, use_tasks=False)
+        async with toolset:
+            tools = await toolset.get_tools(run_context)
+
+        assert (tools['task_required_tool'].tool_def.metadata or {}).get('task') is True
+        assert (tools['task_optional_tool'].tool_def.metadata or {}).get('task') is False
+        assert (tools['task_forbidden_tool'].tool_def.metadata or {}).get('task') is False
         assert (tools['plain_tool'].tool_def.metadata or {}).get('task') is False
 
     async def test_required_tool_routes_through_task_path(
         self, task_server: FastMCP[None], run_context: RunContext[None]
     ) -> None:
-        """`mode='required'` succeeds - getting the real result proves `task=True` was sent (the server
-        would otherwise return `-32601: requires task-augmented execution`)."""
-        toolset = MCPToolset(task_server)
+        """Required tasks ignore the client's preference for synchronous optional tools."""
+        toolset = MCPToolset(task_server, use_tasks=False)
         async with toolset:
             tools = await toolset.get_tools(run_context)
             result = await toolset.call_tool('task_required_tool', {}, run_context, tools['task_required_tool'])
@@ -1560,13 +1576,30 @@ class TestMCPToolsetBackgroundTasks:
     async def test_optional_tool_routes_through_task_path(
         self, task_server: FastMCP[None], run_context: RunContext[None]
     ) -> None:
-        """`mode='optional'` also goes through the task path by default - the SEP allows either, and the
-        task path delivers durability/cancellation/progress benefits with no functional downside."""
+        """Optional tools use task-augmented execution by default."""
         toolset = MCPToolset(task_server)
         async with toolset:
             tools = await toolset.get_tools(run_context)
             result = await toolset.call_tool('task_optional_tool', {}, run_context, tools['task_optional_tool'])
-        assert result == 'task_optional_completed'
+        assert result == 'task_optional_task'
+
+    async def test_optional_tool_uses_sync_path_when_tasks_disabled(
+        self, task_server: FastMCP[None], run_context: RunContext[None]
+    ) -> None:
+        toolset = MCPToolset(task_server, use_tasks=False)
+        async with toolset:
+            tools = await toolset.get_tools(run_context)
+            result = await toolset.call_tool('task_optional_tool', {}, run_context, tools['task_optional_tool'])
+        assert result == 'task_optional_sync'
+
+    async def test_forbidden_tool_stays_on_sync_path(
+        self, task_server: FastMCP[None], run_context: RunContext[None]
+    ) -> None:
+        toolset = MCPToolset(task_server)
+        async with toolset:
+            tools = await toolset.get_tools(run_context)
+            result = await toolset.call_tool('task_forbidden_tool', {}, run_context, tools['task_forbidden_tool'])
+        assert result == 'task_forbidden_completed'
 
     async def test_plain_tool_stays_on_sync_path(
         self, task_server: FastMCP[None], run_context: RunContext[None]

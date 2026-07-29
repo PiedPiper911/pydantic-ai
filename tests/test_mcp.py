@@ -1759,8 +1759,7 @@ class TestMCPToolsetBackgroundTasks:
         use_optional_tasks: bool,
         expected: str,
     ) -> None:
-        """`process_tool_call` gets a `CallToolFunc` that already has `use_task` baked in via `partial`,
-        so a custom wrapper doesn't need to know about the task path to preserve it."""
+        """The `CallToolFunc` delegate applies the task preference when the wrapper invokes it."""
 
         async def passthrough(ctx: RunContext[Any], call_tool: Any, name: str, args: dict[str, Any]) -> Any:
             return await call_tool(name, args)
@@ -1774,3 +1773,22 @@ class TestMCPToolsetBackgroundTasks:
             tools = await toolset.get_tools(run_context)
             result = await toolset.call_tool('task_optional_tool', {}, run_context, tools['task_optional_tool'])
         assert result == expected
+
+    async def test_process_tool_call_can_short_circuit_before_task_discovery(
+        self, run_context: RunContext[None], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        async def short_circuit(ctx: RunContext[Any], call_tool: Any, name: str, args: dict[str, Any]) -> Any:
+            return 'cached'
+
+        toolset = MCPToolset('https://example.com/mcp', process_tool_call=short_circuit)
+        list_tools = AsyncMock(side_effect=AssertionError('tool discovery should not run'))
+        direct_call_tool = AsyncMock(side_effect=AssertionError('tool call should not run'))
+        monkeypatch.setattr(toolset, 'list_tools', list_tools)
+        monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
+        tool = toolset.tool_for_tool_def(ToolDefinition(name='durable_tool'))
+
+        result = await toolset.call_tool('durable_tool', {}, run_context, tool)
+
+        assert result == 'cached'
+        list_tools.assert_not_awaited()
+        direct_call_tool.assert_not_awaited()

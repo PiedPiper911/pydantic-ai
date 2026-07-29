@@ -1312,13 +1312,21 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         ctx: RunContext[Any],
         tool: ToolsetTool[Any],
     ) -> Any:
-        task_support = await self._get_task_support(name)
-        use_task = task_support == 'required' or (task_support == 'optional' and self.use_optional_tasks)
+        async def call_tool(
+            name: str,
+            args: dict[str, Any],
+            *,
+            metadata: dict[str, Any] | None = None,
+        ) -> ToolResult:
+            task_support = await self._get_task_support(name)
+            use_task = task_support == 'required' or (task_support == 'optional' and self.use_optional_tasks)
+            if metadata is None:
+                return await self.direct_call_tool(name, args, use_task=use_task)
+            return await self.direct_call_tool(name, args, metadata=metadata, use_task=use_task)
+
         if self.process_tool_call is not None:
-            return await self.process_tool_call(
-                ctx, functools.partial(self.direct_call_tool, use_task=use_task), name, tool_args
-            )
-        return await self.direct_call_tool(name, tool_args, use_task=use_task)
+            return await self.process_tool_call(ctx, call_tool, name, tool_args)
+        return await call_tool(name, tool_args)
 
     async def list_prompts(self) -> list[Prompt]:
         """Retrieve the prompts currently exposed by the server.

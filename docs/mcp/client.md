@@ -346,19 +346,21 @@ agent = Agent('openai:gpt-5.2', toolsets=[toolset])
 
 MCP tools can include metadata that provides additional information about the tool's characteristics, which can be useful when [filtering tools][pydantic_ai.toolsets.FilteredToolset]. The `meta` and `annotations` fields can be found on the `metadata` dict on the [`ToolDefinition`][pydantic_ai.tools.ToolDefinition] object that's passed to filter functions, and the tool's output schema (if any) is available as the `return_schema` field.
 
-[`MCPToolset`][pydantic_ai.mcp.MCPToolset] additionally exposes a `task: bool` flag indicating whether the toolset will use [task-augmented execution](#background-tasks) for the tool.
+[`MCPToolset`][pydantic_ai.mcp.MCPToolset] additionally exposes a `task: bool` flag indicating whether the server declares support for [task-augmented execution](#background-tasks) on the tool.
 
 ## Background tasks
 
-[`MCPToolset`][pydantic_ai.mcp.MCPToolset] supports MCP [task-augmented execution](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks) (SEP-1686). Servers can declare per-tool task support via `execution.taskSupport`, and `MCPToolset` routes calls accordingly:
+[`MCPToolset`][pydantic_ai.mcp.MCPToolset] supports MCP [task-augmented execution](https://modelcontextprotocol.io/specification/2025-11-25/basic/utilities/tasks) (SEP-1686). Servers using SEP-1686, including FastMCP 3 servers, can declare per-tool task support via `execution.taskSupport`, and `MCPToolset` routes calls accordingly:
 
 | `execution.taskSupport` | Behavior |
 | --- | --- |
 | `"required"` | Always calls with `task=True`. The server creates a task and the client awaits the final result via `tasks/result`. |
-| `"optional"` | Calls with `task=True` by default. Set [`use_tasks=False`][pydantic_ai.mcp.MCPToolset.use_tasks] to call normally instead. |
+| `"optional"` | Calls with `task=True` by default. Set [`use_optional_tasks=False`][pydantic_ai.mcp.MCPToolset.use_optional_tasks] to call normally instead. |
 | `"forbidden"` or absent | Calls normally. |
 
-For [FastMCP](https://gofastmcp.com/) servers, declare task support per tool with `task=TaskConfig(mode=...)`:
+The newer MCP [Tasks extension](https://tasks.extensions.modelcontextprotocol.io/seps/2663-tasks-extension) (SEP-2663) uses server-directed task creation instead, so this client-side preference does not apply.
+
+For [FastMCP 3](https://gofastmcp.com/) servers, declare task support per tool with `task=TaskConfig(mode=...)`:
 
 ```python {title="background_task_server.py" dunder_name="not_main"}
 from fastmcp import FastMCP
@@ -367,7 +369,7 @@ from fastmcp.server.tasks import TaskConfig
 mcp = FastMCP('long_running_server')
 
 
-@mcp.tool(task=TaskConfig(mode='required'))
+@mcp.tool(task=TaskConfig(mode='optional'))
 async def deep_research(topic: str) -> str:
     import asyncio
     await asyncio.sleep(0)
@@ -378,13 +380,13 @@ if __name__ == '__main__':
     mcp.run(transport='streamable-http')
 ```
 
-By default, [`MCPToolset`][pydantic_ai.mcp.MCPToolset] uses task-augmented execution when a tool supports it. A client that prefers normal calls for tools where task support is optional can set [`use_tasks=False`][pydantic_ai.mcp.MCPToolset.use_tasks]. This setting does not affect tools where task support is required:
+By default, [`MCPToolset`][pydantic_ai.mcp.MCPToolset] uses task-augmented execution when a tool supports it. A client that prefers normal calls for tools where task support is optional can set [`use_optional_tasks=False`][pydantic_ai.mcp.MCPToolset.use_optional_tasks]. This setting does not affect tools where task support is required:
 
 ```python {title="background_task_client.py"}
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPToolset
 
-toolset = MCPToolset('http://localhost:8000/mcp', use_tasks=False)
+toolset = MCPToolset('http://localhost:8000/mcp', use_optional_tasks=False)
 agent = Agent('openai:gpt-5.2', toolsets=[toolset])
 ```
 

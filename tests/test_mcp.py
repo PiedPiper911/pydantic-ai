@@ -23,7 +23,7 @@ import httpx
 import pytest
 from inline_snapshot import snapshot
 
-from pydantic_ai import models
+from pydantic_ai import Agent, models
 from pydantic_ai._run_context import RunContext
 from pydantic_ai._utils import BaseExceptionGroup
 from pydantic_ai.exceptions import ModelRetry, ToolFailed
@@ -1551,25 +1551,60 @@ class TestMCPToolsetBackgroundTasks:
         assert (tools['task_forbidden_tool'].tool_def.metadata or {}).get('task') is False
         assert (tools['plain_tool'].tool_def.metadata or {}).get('task') is False
 
-    async def test_disabling_tasks_only_changes_optional_task_metadata(
+    async def test_disabling_tasks_preserves_server_task_metadata(
         self, task_server: FastMCP[None], run_context: RunContext[None]
     ) -> None:
-        toolset = MCPToolset(task_server, use_tasks=False)
+        toolset = MCPToolset(task_server, use_optional_tasks=False)
         async with toolset:
             tools = await toolset.get_tools(run_context)
 
         assert (tools['task_required_tool'].tool_def.metadata or {}).get('task') is True
-        assert (tools['task_optional_tool'].tool_def.metadata or {}).get('task') is False
+        assert (tools['task_optional_tool'].tool_def.metadata or {}).get('task') is True
         assert (tools['task_forbidden_tool'].tool_def.metadata or {}).get('task') is False
         assert (tools['plain_tool'].tool_def.metadata or {}).get('task') is False
+
+    async def test_explicit_forbidden_task_support_stays_on_sync_path(
+        self, run_context: RunContext[None], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The in-process FastMCP server omits `execution` for forbidden tools, so supply the
+        explicit protocol value to cover that distinct wire shape."""
+        toolset = MCPToolset('https://example.com/mcp')
+        monkeypatch.setattr(
+            toolset,
+            'list_tools',
+            AsyncMock(
+                return_value=[
+                    mcp_types.Tool(
+                        name='forbidden_tool',
+                        inputSchema={'type': 'object'},
+                        execution=mcp_types.ToolExecution(taskSupport='forbidden'),
+                    )
+                ]
+            ),
+        )
+        direct_call_tool = AsyncMock(return_value='completed')
+        monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
+
+        tools = await toolset.get_tools(run_context)
+        metadata = tools['forbidden_tool'].tool_def.metadata
+        assert metadata is not None
+        assert metadata['task'] is False
+        metadata['task'] = True
+        result = await toolset.call_tool('forbidden_tool', {}, run_context, tools['forbidden_tool'])
+
+        assert result == 'completed'
+        direct_call_tool.assert_awaited_once_with('forbidden_tool', {}, use_task=False)
 
     async def test_required_tool_routes_through_task_path(
         self, task_server: FastMCP[None], run_context: RunContext[None]
     ) -> None:
         """Required tasks ignore the client's preference for synchronous optional tools."""
-        toolset = MCPToolset(task_server, use_tasks=False)
+        toolset = MCPToolset(task_server, use_optional_tasks=False)
         async with toolset:
             tools = await toolset.get_tools(run_context)
+            metadata = tools['task_required_tool'].tool_def.metadata
+            assert metadata is not None
+            metadata['task'] = False
             result = await toolset.call_tool('task_required_tool', {}, run_context, tools['task_required_tool'])
         assert result == 'task_required_completed'
 
@@ -1586,11 +1621,19 @@ class TestMCPToolsetBackgroundTasks:
     async def test_optional_tool_uses_sync_path_when_tasks_disabled(
         self, task_server: FastMCP[None], run_context: RunContext[None]
     ) -> None:
-        toolset = MCPToolset(task_server, use_tasks=False)
+        toolset = MCPToolset(task_server, use_optional_tasks=False)
         async with toolset:
             tools = await toolset.get_tools(run_context)
             result = await toolset.call_tool('task_optional_tool', {}, run_context, tools['task_optional_tool'])
         assert result == 'task_optional_sync'
+
+    async def test_agent_uses_sync_path_for_optional_tool_when_tasks_disabled(self, task_server: FastMCP[None]) -> None:
+        toolset = MCPToolset(task_server, use_optional_tasks=False)
+        agent = Agent(TestModel(call_tools=['task_optional_tool']), toolsets=[toolset])
+
+        result = await agent.run('Call the optional task tool')
+
+        assert result.output == '{"task_optional_tool":"task_optional_sync"}'
 
     async def test_forbidden_tool_stays_on_sync_path(
         self, task_server: FastMCP[None], run_context: RunContext[None]
@@ -1620,8 +1663,16 @@ class TestMCPToolsetBackgroundTasks:
             result = await toolset.direct_call_tool('task_required_tool', {}, use_task=True)
         assert result == 'task_required_completed'
 
-    async def test_process_tool_call_receives_use_task_partial(
-        self, task_server: FastMCP[None], run_context: RunContext[None]
+    @pytest.mark.parametrize(
+        ('use_optional_tasks', 'expected'),
+        [(True, 'task_optional_task'), (False, 'task_optional_sync')],
+    )
+    async def test_process_tool_call_preserves_task_preference(
+        self,
+        task_server: FastMCP[None],
+        run_context: RunContext[None],
+        use_optional_tasks: bool,
+        expected: str,
     ) -> None:
         """`process_tool_call` gets a `CallToolFunc` that already has `use_task` baked in via `partial`,
         so a custom wrapper doesn't need to know about the task path to preserve it."""
@@ -1629,8 +1680,12 @@ class TestMCPToolsetBackgroundTasks:
         async def passthrough(ctx: RunContext[Any], call_tool: Any, name: str, args: dict[str, Any]) -> Any:
             return await call_tool(name, args)
 
-        toolset = MCPToolset(task_server, process_tool_call=passthrough)
+        toolset = MCPToolset(
+            task_server,
+            process_tool_call=passthrough,
+            use_optional_tasks=use_optional_tasks,
+        )
         async with toolset:
             tools = await toolset.get_tools(run_context)
-            result = await toolset.call_tool('task_required_tool', {}, run_context, tools['task_required_tool'])
-        assert result == 'task_required_completed'
+            result = await toolset.call_tool('task_optional_tool', {}, run_context, tools['task_optional_tool'])
+        assert result == expected

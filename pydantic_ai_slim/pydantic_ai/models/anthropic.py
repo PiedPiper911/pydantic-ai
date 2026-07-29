@@ -266,9 +266,9 @@ _DYNAMIC_WEB_TOOLS_UNSUPPORTED_CLIENTS = (
     AsyncAnthropicBedrockMantle,
     AsyncAnthropicVertex,
 )
-# The advisor tool is available on the direct Anthropic API and Claude Platform on AWS
-# (`AsyncAnthropicBedrockMantle`) only — not on the legacy Bedrock InvokeModel client, Vertex, or
-# Foundry. `AsyncAnthropicBedrockMantle` isn't a subclass of `AsyncAnthropicBedrock`, so the plain
+# The advisor tool is available on the direct Anthropic API and `AsyncAnthropicBedrockMantle`
+# only — not on the legacy Bedrock InvokeModel client, Vertex, or Foundry.
+# `AsyncAnthropicBedrockMantle` isn't a subclass of `AsyncAnthropicBedrock`, so the plain
 # isinstance tuple keeps it supported.
 _ADVISOR_UNSUPPORTED_CLIENTS = (AsyncAnthropicBedrock, AsyncAnthropicVertex, AsyncAnthropicFoundry)
 

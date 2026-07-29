@@ -1155,11 +1155,9 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         max_retries = self.max_retries if self.max_retries is not None else ctx.max_retries
         tools: dict[str, ToolsetTool[AgentDepsT]] = {}
         mcp_tools = await self.list_tools()
-        self._task_support_by_tool_name = {
-            tool.name: tool.execution.taskSupport if tool.execution else None for tool in mcp_tools
-        }
+        task_support_by_tool_name = self._record_task_support(mcp_tools)
         for mcp_tool in mcp_tools:
-            task_support = mcp_tool.execution.taskSupport if mcp_tool.execution else None
+            task_support = task_support_by_tool_name[mcp_tool.name]
             tools[mcp_tool.name] = ToolsetTool[AgentDepsT](
                 toolset=self,
                 tool_def=ToolDefinition(
@@ -1179,14 +1177,24 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
             )
         return tools
 
+    def _record_task_support(
+        self, mcp_tools: list[mcp_types.Tool]
+    ) -> dict[str, Literal['forbidden', 'optional', 'required'] | None]:
+        task_support_by_tool_name: dict[str, Literal['forbidden', 'optional', 'required'] | None] = {
+            tool.name: tool.execution.taskSupport if tool.execution else None for tool in mcp_tools
+        }
+        # `list_tools()` can own an implicit one-shot session. Only retain declarations while an
+        # explicit outer session remains active, so disconnects cannot leave stale routing state.
+        if self.is_running:
+            self._task_support_by_tool_name = task_support_by_tool_name
+        return task_support_by_tool_name
+
     async def _get_task_support(self, name: str) -> Literal['forbidden', 'optional', 'required'] | None:
-        if name not in self._task_support_by_tool_name:
+        if not self.cache_tools or name not in self._task_support_by_tool_name:
             # A durable tool call may run in a fresh worker that did not perform tool discovery.
             # Re-read the server declaration rather than relying on preparable `ToolDefinition` metadata.
             mcp_tools = await self.list_tools()
-            self._task_support_by_tool_name = {
-                tool.name: tool.execution.taskSupport if tool.execution else None for tool in mcp_tools
-            }
+            return self._record_task_support(mcp_tools).get(name)
         return self._task_support_by_tool_name.get(name)
 
     def tool_for_tool_def(self, tool_def: ToolDefinition) -> ToolsetTool[AgentDepsT]:

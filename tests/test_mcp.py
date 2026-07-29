@@ -1684,6 +1684,42 @@ class TestMCPToolsetBackgroundTasks:
         assert result == 'completed'
         direct_call_tool.assert_awaited_once_with('durable_tool', {}, use_task=expected_use_task)
 
+    async def test_task_support_is_not_retained_after_implicit_session(
+        self, task_server: FastMCP[None], run_context: RunContext[None]
+    ) -> None:
+        toolset = MCPToolset(task_server)
+
+        await toolset.get_tools(run_context)
+
+        assert toolset.is_running is False
+        assert toolset._task_support_by_tool_name == {}  # pyright: ignore[reportPrivateUsage]
+
+    async def test_disabling_tool_cache_refreshes_task_support(
+        self, run_context: RunContext[None], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        toolset = MCPToolset('https://example.com/mcp', use_optional_tasks=False, cache_tools=False)
+        optional_tool = mcp_types.Tool(
+            name='durable_tool',
+            inputSchema={'type': 'object'},
+            execution=mcp_types.ToolExecution(taskSupport='optional'),
+        )
+        required_tool = mcp_types.Tool(
+            name='durable_tool',
+            inputSchema={'type': 'object'},
+            execution=mcp_types.ToolExecution(taskSupport='required'),
+        )
+        list_tools = AsyncMock(side_effect=[[optional_tool], [required_tool]])
+        monkeypatch.setattr(toolset, 'list_tools', list_tools)
+        direct_call_tool = AsyncMock(return_value='completed')
+        monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
+        tool = toolset.tool_for_tool_def(ToolDefinition(name='durable_tool'))
+
+        await toolset.call_tool('durable_tool', {}, run_context, tool)
+        await toolset.call_tool('durable_tool', {}, run_context, tool)
+
+        assert list_tools.await_count == 2
+        assert [call.kwargs['use_task'] for call in direct_call_tool.await_args_list] == [False, True]
+
     async def test_forbidden_tool_stays_on_sync_path(
         self, task_server: FastMCP[None], run_context: RunContext[None]
     ) -> None:

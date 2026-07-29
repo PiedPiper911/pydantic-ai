@@ -13,6 +13,7 @@ import asyncio
 import base64
 import json
 import re
+from dataclasses import replace
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from typing import Any, Literal
@@ -28,6 +29,7 @@ from pydantic_ai._run_context import RunContext
 from pydantic_ai._utils import BaseExceptionGroup
 from pydantic_ai.exceptions import ModelRetry, ToolFailed
 from pydantic_ai.models.test import TestModel
+from pydantic_ai.tools import ToolDefinition
 from pydantic_ai.usage import RunUsage
 
 from .conftest import try_import
@@ -1144,8 +1146,6 @@ class TestMCPToolsetIntegration:
         assert 'MCPToolset' in toolset.label
 
     async def test_tool_for_tool_def_uses_default_retries_when_unset(self):
-        from pydantic_ai.tools import ToolDefinition
-
         toolset = MCPToolset('https://example.com/mcp')
         tool = toolset.tool_for_tool_def(
             ToolDefinition(name='foo', description='', parameters_json_schema={'type': 'object'})
@@ -1602,9 +1602,6 @@ class TestMCPToolsetBackgroundTasks:
         toolset = MCPToolset(task_server, use_optional_tasks=False)
         async with toolset:
             tools = await toolset.get_tools(run_context)
-            metadata = tools['task_required_tool'].tool_def.metadata
-            assert metadata is not None
-            metadata['task'] = False
             result = await toolset.call_tool('task_required_tool', {}, run_context, tools['task_required_tool'])
         assert result == 'task_required_completed'
 
@@ -1634,6 +1631,58 @@ class TestMCPToolsetBackgroundTasks:
         result = await agent.run('Call the optional task tool')
 
         assert result.output == '{"task_optional_tool":"task_optional_sync"}'
+
+    @pytest.mark.parametrize(
+        ('tool_name', 'expected'),
+        [
+            ('task_required_tool', '{"task_required_tool":"task_required_completed"}'),
+            ('task_optional_tool', '{"task_optional_tool":"task_optional_sync"}'),
+        ],
+    )
+    async def test_preparing_metadata_does_not_change_task_routing(
+        self, task_server: FastMCP[None], tool_name: str, expected: str
+    ) -> None:
+        """Tool preparation may replace public metadata without changing the server's execution contract."""
+
+        def clear_metadata(_ctx: RunContext[object], tool_defs: list[ToolDefinition]) -> list[ToolDefinition]:
+            return [replace(tool_def, metadata={}) for tool_def in tool_defs]
+
+        toolset = MCPToolset(task_server, use_optional_tasks=False).prepared(clear_metadata)
+        agent = Agent(TestModel(call_tools=[tool_name]), toolsets=[toolset])
+
+        result = await agent.run('Call the tool')
+
+        assert result.output == expected
+
+    @pytest.mark.parametrize(
+        ('task_support', 'expected_use_task'),
+        [('required', True), ('optional', False), ('forbidden', False), (None, False)],
+    )
+    async def test_task_support_is_rediscovered_for_reconstructed_tool_definition(
+        self,
+        run_context: RunContext[None],
+        monkeypatch: pytest.MonkeyPatch,
+        task_support: Literal['required', 'optional', 'forbidden'] | None,
+        expected_use_task: bool,
+    ) -> None:
+        """A fresh durable worker receives a prepared tool definition but can rediscover routing state."""
+        toolset = MCPToolset('https://example.com/mcp', use_optional_tasks=False)
+        execution = mcp_types.ToolExecution(taskSupport=task_support) if task_support is not None else None
+        monkeypatch.setattr(
+            toolset,
+            'list_tools',
+            AsyncMock(
+                return_value=[mcp_types.Tool(name='durable_tool', inputSchema={'type': 'object'}, execution=execution)]
+            ),
+        )
+        direct_call_tool = AsyncMock(return_value='completed')
+        monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
+        tool = toolset.tool_for_tool_def(ToolDefinition(name='durable_tool', metadata={}))
+
+        result = await toolset.call_tool('durable_tool', {}, run_context, tool)
+
+        assert result == 'completed'
+        direct_call_tool.assert_awaited_once_with('durable_tool', {}, use_task=expected_use_task)
 
     async def test_forbidden_tool_stays_on_sync_path(
         self, task_server: FastMCP[None], run_context: RunContext[None]

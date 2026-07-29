@@ -806,6 +806,7 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
     _cached_tools: list[mcp_types.Tool] | None
     _cached_resources: list[Resource] | None
     _cached_prompts: list[Prompt] | None
+    _task_support_by_tool_name: dict[str, Literal['forbidden', 'optional', 'required'] | None]
     _running_count: int
     _exit_stack: AsyncExitStack | None
     _user_message_handler: MessageHandlerT | None
@@ -1003,6 +1004,7 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         self._cached_tools = None
         self._cached_resources = None
         self._cached_prompts = None
+        self._task_support_by_tool_name = {}
         self._running_count = 0
         self._exit_stack = None
 
@@ -1075,6 +1077,7 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
 
     def _invalidate_tools_cache(self) -> None:
         self._cached_tools = None
+        self._task_support_by_tool_name = {}
 
     def _invalidate_resources_cache(self) -> None:
         self._cached_resources = None
@@ -1120,6 +1123,7 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
                 self._cached_tools = None
                 self._cached_resources = None
                 self._cached_prompts = None
+                self._task_support_by_tool_name = {}
         return None
 
     async def get_instructions(self, ctx: RunContext[AgentDepsT]) -> messages.InstructionPart | None:
@@ -1150,7 +1154,11 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
     async def get_tools(self, ctx: RunContext[AgentDepsT]) -> dict[str, ToolsetTool[AgentDepsT]]:
         max_retries = self.max_retries if self.max_retries is not None else ctx.max_retries
         tools: dict[str, ToolsetTool[AgentDepsT]] = {}
-        for mcp_tool in await self.list_tools():
+        mcp_tools = await self.list_tools()
+        self._task_support_by_tool_name = {
+            tool.name: tool.execution.taskSupport if tool.execution else None for tool in mcp_tools
+        }
+        for mcp_tool in mcp_tools:
             task_support = mcp_tool.execution.taskSupport if mcp_tool.execution else None
             tools[mcp_tool.name] = ToolsetTool[AgentDepsT](
                 toolset=self,
@@ -1162,9 +1170,6 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
                         'meta': mcp_tool.meta,
                         'annotations': mcp_tool.annotations.model_dump() if mcp_tool.annotations else None,
                         'task': task_support in ('required', 'optional'),
-                        # Durable wrappers serialize `ToolDefinition`, so the server declaration
-                        # needed to route the later call has to travel with the tool.
-                        '_mcp_task_support': task_support,
                     },
                     return_schema=mcp_tool.outputSchema or None,
                     include_return_schema=self.include_return_schema,
@@ -1173,6 +1178,16 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
                 args_validator=TOOL_SCHEMA_VALIDATOR,
             )
         return tools
+
+    async def _get_task_support(self, name: str) -> Literal['forbidden', 'optional', 'required'] | None:
+        if name not in self._task_support_by_tool_name:
+            # A durable tool call may run in a fresh worker that did not perform tool discovery.
+            # Re-read the server declaration rather than relying on preparable `ToolDefinition` metadata.
+            mcp_tools = await self.list_tools()
+            self._task_support_by_tool_name = {
+                tool.name: tool.execution.taskSupport if tool.execution else None for tool in mcp_tools
+            }
+        return self._task_support_by_tool_name.get(name)
 
     def tool_for_tool_def(self, tool_def: ToolDefinition) -> ToolsetTool[AgentDepsT]:
         return ToolsetTool[AgentDepsT](
@@ -1289,13 +1304,8 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         ctx: RunContext[Any],
         tool: ToolsetTool[Any],
     ) -> Any:
-        metadata = tool.tool_def.metadata or {}
-        if '_mcp_task_support' in metadata:
-            task_support = metadata['_mcp_task_support']
-            use_task = task_support == 'required' or (task_support == 'optional' and self.use_optional_tasks)
-        else:
-            # Support `ToolDefinition` values serialized before `_mcp_task_support` was added.
-            use_task = bool(metadata.get('task'))
+        task_support = await self._get_task_support(name)
+        use_task = task_support == 'required' or (task_support == 'optional' and self.use_optional_tasks)
         if self.process_tool_call is not None:
             return await self.process_tool_call(
                 ctx, functools.partial(self.direct_call_tool, use_task=use_task), name, tool_args

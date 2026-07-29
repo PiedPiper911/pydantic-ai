@@ -360,7 +360,9 @@ MCP tools can include metadata that provides additional information about the to
 
 The newer MCP [Tasks extension](https://tasks.extensions.modelcontextprotocol.io/seps/2663-tasks-extension) (SEP-2663) uses server-directed task creation instead, so this client-side preference does not apply.
 
-For [FastMCP 3](https://gofastmcp.com/) servers, declare task support per tool with `task=TaskConfig(mode=...)`:
+For [FastMCP 3](https://gofastmcp.com/v3/servers/tasks) servers, install the tasks extra with
+`pip install "fastmcp[tasks]>=3,<4"` and declare task support per tool with
+`task=TaskConfig(mode=...)`:
 
 ```python {title="background_task_server.py" dunder_name="not_main"}
 from fastmcp import FastMCP

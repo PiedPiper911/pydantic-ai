@@ -48,6 +48,7 @@ from pydantic_ai.exceptions import (
     ApprovalRequired,
     CallDeferred,
     ModelRetry,
+    RunCancelled,
     ToolFailed,
     UsageLimitExceeded,
     UserError,
@@ -2133,9 +2134,10 @@ def test_dbos_mcp_wrapper_visit_and_replace():
 
 def _durability_model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     """Simple model function for durability tests."""
-    for msg in reversed(messages):  # pragma: no branch - first message carries the prompt
-        for part in msg.parts:  # pragma: no branch - first part is the UserPromptPart
-            if isinstance(part, UserPromptPart):  # pragma: no branch - same reason
+    # The first message carries the prompt and its first part is the `UserPromptPart`, so none of these branch.
+    for msg in reversed(messages):  # pragma: no branch
+        for part in msg.parts:  # pragma: no branch
+            if isinstance(part, UserPromptPart):  # pragma: no branch
                 return ModelResponse(parts=[TextPart(content=f'Echo: {part.content}')])
     return ModelResponse(parts=[TextPart(content='no prompt')])  # pragma: no cover
 
@@ -2420,6 +2422,62 @@ async def test_dbos_dynamic_tool_rejects_enqueue_in_workflow(dbos: DBOS) -> None
     await agent.run('run')
 
 
+async def test_dbos_step_wrapped_tool_rejects_cancel_run_in_workflow(dbos: DBOS) -> None:
+    """`ctx.cancel_run()` inside a step-wrapped (dynamic) tool raises instead of replay-diverging.
+
+    Recovery replays the recorded step output without re-executing the tool, so an in-step
+    cancellation would silently not happen again. Outside a workflow the step degrades to a
+    plain call and cancellation keeps working.
+    """
+
+    async def cancel(ctx: RunContext[object]) -> str:
+        ctx.cancel_run()
+        return 'never reached'  # pragma: no cover
+
+    agent = Agent(
+        TestModel(),
+        deps_type=object,
+        name='dbos_cancel_run_dynamic',
+        toolsets=[DynamicToolset(lambda ctx: FunctionToolset([cancel]), id='cancel_dynamic')],
+        capabilities=[DBOSDurability()],
+    )
+
+    @DBOS.workflow()
+    async def run_workflow() -> None:
+        await agent.run('run')
+
+    with pytest.raises(UserError, match='cancellation would silently not happen again'):
+        await run_workflow()
+
+    with pytest.raises(RunCancelled):
+        await agent.run('run')
+
+
+async def test_dbos_plain_tool_cancel_run_works_in_workflow(dbos: DBOS) -> None:
+    """A plain function tool is NOT step-wrapped under DBOS: it runs at workflow level, where
+    `cancel_run()` is live and replay-consistent (workflow-level code re-executes on recovery),
+    so cancellation works and surfaces as an ordinary `RunCancelled` application outcome."""
+
+    async def cancel(ctx: RunContext[object]) -> str:
+        ctx.cancel_run()
+        return 'never reached'  # pragma: no cover
+
+    agent = Agent(
+        TestModel(),
+        deps_type=object,
+        name='dbos_cancel_run_plain',
+        tools=[cancel],
+        capabilities=[DBOSDurability()],
+    )
+
+    @DBOS.workflow()
+    async def run_workflow() -> None:
+        await agent.run('run')
+
+    with pytest.raises(RunCancelled):
+        await run_workflow()
+
+
 async def test_dbos_durability_parallel_mode_applies_inside_run(dbos: DBOS) -> None:
     """The configured parallel-execution mode is active for the duration of the run."""
     from pydantic_ai import tool_manager as _tm
@@ -2661,7 +2719,8 @@ async def test_dbos_durability_resolve_model_id_capability_is_deps_aware(dbos: D
 def _dbos_broken_resolver(ctx: ModelResolutionContext[Any], model_id: str) -> FunctionModel | None:
     if model_id == 'broken-model':
         raise ValueError('resolver exploded')
-    return None  # pragma: no cover - only 'broken-model' flows through this test
+    # Only 'broken-model' flows through this test.
+    return None  # pragma: no cover
 
 
 async def test_dbos_durability_user_resolver_error_propagates(dbos: DBOS) -> None:
@@ -2801,9 +2860,10 @@ def test_dbos_durability_get_serialization_name() -> None:
 
 
 async def _durability_stream_fn(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
-    for msg in reversed(messages):  # pragma: no branch - first message carries the prompt
-        for part in msg.parts:  # pragma: no branch - first part is the UserPromptPart
-            if isinstance(part, UserPromptPart):  # pragma: no branch - same reason
+    # The first message carries the prompt and its first part is the `UserPromptPart`, so none of these branch.
+    for msg in reversed(messages):  # pragma: no branch
+        for part in msg.parts:  # pragma: no branch
+            if isinstance(part, UserPromptPart):  # pragma: no branch
                 yield f'Echo: {part.content}'
                 return
     yield 'no prompt'  # pragma: no cover
@@ -3204,7 +3264,8 @@ async def test_dbos_durability_dynamic_capability_tool_runs_in_step(dbos: DBOS) 
 
 def test_dbos_durability_dynamic_capability_requires_id(dbos: DBOS) -> None:
     def factory(ctx: RunContext[Any]) -> Capability[Any]:
-        return Capability()  # pragma: no cover — construction raises before the factory can run
+        # Construction raises before the factory can run.
+        return Capability()  # pragma: no cover
 
     with pytest.raises(UserError, match=r"DynamicCapability\(\.\.\., id='user-tools'\)"):
         Agent(
@@ -3219,7 +3280,8 @@ def test_dbos_durability_bare_capability_func_requires_explicit_wrapper(dbos: DB
     so under durable execution it raises with a hint to wrap it explicitly."""
 
     def factory(ctx: RunContext[Any]) -> Capability[Any]:
-        return Capability()  # pragma: no cover — construction raises before the factory can run
+        # Construction raises before the factory can run.
+        return Capability()  # pragma: no cover
 
     with pytest.raises(UserError, match=r'wrap it explicitly'):
         Agent(
@@ -3310,7 +3372,8 @@ async def test_dbos_durability_rejects_runtime_mcp_toolset_in_iter(dbos: DBOS) -
             'Hello',
             toolsets=[MCPToolset(StdioTransport(command='python', args=['-m', 'tests.mcp_server']), id='iter_mcp')],
         ):
-            pass  # pragma: no cover — run setup raises before any node runs
+            # Run setup raises before any node runs.
+            pass  # pragma: no cover
 
     with pytest.raises(
         UserError, match=r'MCPToolset cannot be passed to `run\(toolsets=\.\.\.\)` at runtime with DBOS'
@@ -3319,7 +3382,8 @@ async def test_dbos_durability_rejects_runtime_mcp_toolset_in_iter(dbos: DBOS) -
 
 
 def _per_run_dynamic_factory(ctx: RunContext[Any]) -> FunctionToolset[Any]:
-    return FunctionToolset()  # pragma: no cover — rejected before the factory is resolved
+    # Rejected before the factory is resolved.
+    return FunctionToolset()  # pragma: no cover
 
 
 async def test_dbos_durability_rejects_per_run_capability_toolset(dbos: DBOS) -> None:

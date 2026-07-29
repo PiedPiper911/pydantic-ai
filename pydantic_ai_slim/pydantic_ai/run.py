@@ -498,13 +498,15 @@ class AgentRun(Generic[AgentDepsT, OutputDataT]):
         complete snapshot that can be passed to a new run as `message_history` to resume the
         conversation.
 
+        Cancellation is terminal: capability hooks (`wrap_run`, `wrap_node_run`, `on_run_error`)
+        may observe it and clean up, but cannot recover the run into a successful result.
+
         Unlike [`StreamedRunResult.cancel()`][pydantic_ai.result.StreamedRunResult.cancel], which
         only stops the current model response and lets the run continue, this ends the run itself.
 
-        Safe to call from another task (e.g. a TUI's key handler while the run is awaited
-        elsewhere), but not from another thread — marshal onto the run's event loop first
-        (e.g. `loop.call_soon_threadsafe(agent_run.cancel)`). Idempotent; a no-op once the run
-        has finished. Externally cancelling the task running the agent (`asyncio.Task.cancel()`)
+        Safe to call from another task or thread (e.g. a TUI's key handler while the run is
+        awaited elsewhere). Idempotent; a no-op once the run has finished. Externally cancelling
+        the task running the agent (`asyncio.Task.cancel()`)
         remains supported and keeps raising `asyncio.CancelledError` instead; when both happen,
         the external cancellation wins.
         """

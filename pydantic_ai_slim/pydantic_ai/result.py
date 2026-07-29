@@ -153,7 +153,12 @@ class AgentStream(Generic[AgentDepsT, OutputDataT]):
                 yield text
 
     async def cancel(self) -> None:
-        """Cancel the stream, stopping token generation and closing the underlying connection."""
+        """Cancel the stream, stopping token generation and closing the underlying connection.
+
+        This stops only the current model response; the run continues. To end the whole run,
+        use [`AgentRun.cancel()`][pydantic_ai.run.AgentRun.cancel] or
+        [`RunContext.cancel_run()`][pydantic_ai.tools.RunContext.cancel_run].
+        """
         await self._raw_stream_response.cancel()
 
     async def drain(self) -> None:
@@ -717,6 +722,10 @@ class StreamedRunResult(Generic[AgentDepsT, OutputDataT]):
 
         The interrupted response state is recorded in the message history so that
         `all_messages()` includes it.
+
+        This stops only the current model response; the run continues. To end the whole run,
+        use [`AgentRun.cancel()`][pydantic_ai.run.AgentRun.cancel] or
+        [`RunContext.cancel_run()`][pydantic_ai.tools.RunContext.cancel_run].
         """
         if self._stream_response is not None:  # pragma: no branch
             await self._stream_response.cancel()
@@ -732,7 +741,8 @@ class StreamedRunResult(Generic[AgentDepsT, OutputDataT]):
         """Whether the stream has been cancelled via `cancel()`."""
         if self._stream_response is not None:
             return self._stream_response.cancelled
-        return False  # pragma: no cover -- only reachable via wrap_run short-circuit (no stream)
+        # Only reachable via a `wrap_run` short-circuit, where there is no stream.
+        return False  # pragma: no cover
 
 
 class StreamedRunResultSync(Generic[AgentDepsT, OutputDataT]):
@@ -980,6 +990,7 @@ def _get_usage_checking_stream_response(
         async def _usage_checking_iterator():
             async for item in stream_response:
                 limits.check_tokens(get_usage())
+                limits.check_per_request_input_tokens(stream_response.usage.input_tokens)
                 yield item
 
         return _usage_checking_iterator()

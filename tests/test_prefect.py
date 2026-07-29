@@ -56,6 +56,7 @@ from pydantic_ai.exceptions import (
     ApprovalRequired,
     CallDeferred,
     ModelRetry,
+    RunCancelled,
     ToolFailed,
     UsageLimitExceeded,
     UserError,
@@ -1868,9 +1869,10 @@ async def test_disabled_tool():
 
 def _durability_model_fn(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
     """Simple model function for durability tests."""
-    for msg in reversed(messages):  # pragma: no branch - first message carries the prompt
-        for part in msg.parts:  # pragma: no branch - first part is the UserPromptPart
-            if isinstance(part, UserPromptPart):  # pragma: no branch - same reason
+    # The first message carries the prompt and its first part is the `UserPromptPart`, so none of these branch.
+    for msg in reversed(messages):  # pragma: no branch
+        for part in msg.parts:  # pragma: no branch
+            if isinstance(part, UserPromptPart):  # pragma: no branch
                 return ModelResponse(parts=[TextPart(content=f'Echo: {part.content}')])
     return ModelResponse(parts=[TextPart(content='no prompt')])  # pragma: no cover
 
@@ -1902,7 +1904,8 @@ def test_resolve_tool_task_config_reads_metadata() -> None:
     fn_toolset = FunctionToolset[None](id='resolve_meta_toolset')
 
     def fn_tool() -> str:
-        return 'ok'  # pragma: no cover - registered with toolset; test only resolves metadata
+        # Registered with the toolset; the test only resolves metadata.
+        return 'ok'  # pragma: no cover
 
     fn_toolset.add_function(fn_tool, metadata={'prefect': metadata_config})
     tool_def = ToolDefinition(name='fn_tool', metadata={'prefect': metadata_config})
@@ -2026,10 +2029,11 @@ async def test_prefect_durability_allows_fully_opted_out_runtime_function_toolse
 
 
 async def test_prefect_durability_rejects_partially_opted_out_runtime_function_toolset() -> None:
-    async def opted_out() -> str:  # pragma: no cover — rejected before any tool runs
+    # Both tools below are rejected before any tool runs.
+    async def opted_out() -> str:  # pragma: no cover
         return 'ok'
 
-    async def wrapped() -> str:  # pragma: no cover — rejected before any tool runs
+    async def wrapped() -> str:  # pragma: no cover
         return 'no'
 
     toolset = FunctionToolset(id='runtime')
@@ -2056,7 +2060,8 @@ async def test_prefect_durability_rejects_runtime_toolset_in_iter() -> None:
     @flow
     async def run_agent() -> None:
         async with agent.iter('Hello', toolsets=[FunctionToolset(id='iter_fn')]):
-            pass  # pragma: no cover — run setup raises before any node runs
+            # Run setup raises before any node runs.
+            pass  # pragma: no cover
 
     with pytest.raises(UserError, match='FunctionToolset cannot be passed to '):
         await run_agent()
@@ -2149,7 +2154,8 @@ async def test_prefect_durability_dynamic_capability_tool_runs_as_task() -> None
 
 def test_prefect_durability_dynamic_capability_requires_id() -> None:
     def factory(ctx: RunContext[Any]) -> Capability[Any]:
-        return Capability()  # pragma: no cover — construction raises before the factory can run
+        # Construction raises before the factory can run.
+        return Capability()  # pragma: no cover
 
     with pytest.raises(UserError, match=r"DynamicCapability\(\.\.\., id='user-tools'\)"):
         Agent(
@@ -2465,9 +2471,10 @@ async def test_prefect_durability_passes_through_non_wrappable_leaf() -> None:
 
 
 async def _durability_stream_fn(messages: list[ModelMessage], info: AgentInfo) -> AsyncIterator[str]:
-    for msg in reversed(messages):  # pragma: no branch - first message carries the prompt
-        for part in msg.parts:  # pragma: no branch - first part is the UserPromptPart
-            if isinstance(part, UserPromptPart):  # pragma: no branch - same reason
+    # The first message carries the prompt and its first part is the `UserPromptPart`, so none of these branch.
+    for msg in reversed(messages):  # pragma: no branch
+        for part in msg.parts:  # pragma: no branch
+            if isinstance(part, UserPromptPart):  # pragma: no branch
                 yield f'Echo: {part.content}'
                 return
     yield 'no prompt'  # pragma: no cover
@@ -2696,6 +2703,32 @@ async def test_prefect_task_wrapped_tool_rejects_enqueue() -> None:
 
     # Outside a flow the tool runs inline and enqueueing keeps working.
     await agent.run('run')
+
+
+async def test_prefect_task_wrapped_tool_rejects_cancel_run() -> None:
+    """`ctx.cancel_run()` inside a task-wrapped tool raises instead of replay-diverging.
+
+    A cache hit replays the recorded task output without re-executing the tool, so an in-task
+    cancellation would silently not happen again. Outside a flow the tool runs inline and
+    cancellation keeps working.
+    """
+
+    async def cancel(ctx: RunContext[object]) -> str:
+        ctx.cancel_run()
+        return 'never reached'  # pragma: no cover
+
+    durability: PrefectDurability[object] = PrefectDurability()
+    agent = Agent(TestModel(), deps_type=object, name='prefect_cancel_run', tools=[cancel], capabilities=[durability])
+
+    @flow
+    async def run_agent() -> None:
+        await agent.run('run')
+
+    with pytest.raises(UserError, match='cancellation would silently not happen again'):
+        await run_agent()
+
+    with pytest.raises(RunCancelled):
+        await agent.run('run')
 
 
 async def test_prefect_mcp_task_wrapped_call_rejects_enqueue(monkeypatch: pytest.MonkeyPatch) -> None:

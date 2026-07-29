@@ -45,6 +45,7 @@ from .._agent_graph import (
     build_run_context,
     capture_run_messages,
 )
+from .._cancel import CancellationToken
 from .._deferred_capabilities import parse_loaded_capabilities
 from .._instructions import AgentInstructions
 from .._output import OutputToolset
@@ -952,6 +953,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -976,6 +978,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1000,6 +1003,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1086,6 +1090,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
                 that receives [`RunContext`][pydantic_ai.tools.RunContext] and returns settings.
                 Callables are called before each model request, allowing dynamic per-step settings.
             usage_limits: Optional limits on model request count or token usage.
+            cancellation_token: Token used to cancel this run from another task or thread.
             usage: Optional usage to start with, useful for resuming a conversation or agents used in tools.
             metadata: Optional metadata to attach to this run. Accepts a dictionary or a callable taking
                 [`RunContext`][pydantic_ai.tools.RunContext]; merged with the agent's configured metadata.
@@ -1652,7 +1657,6 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
                 yield
             except asyncio.CancelledError as exc:
                 first_party = graph_deps.cancellation.resolve()
-                graph_deps.cancellation.release_issued()
                 if first_party:
                     raise _run_cancelled('The agent run was cancelled.') from exc
                 # An external cancellation must keep propagating as `CancelledError`, but the run
@@ -1661,10 +1665,12 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
                 # last and wins, giving its awaiter the outer run's history.
                 _run_cancelled('The agent run was cancelled by an external asyncio cancellation.')._attach_to(exc)  # pyright: ignore[reportPrivateUsage]
                 raise
-            else:
-                # A requested cancellation that user code swallowed inside the block, or that was
-                # issued to a superseded driving task, must not leak an elevated `Task.cancelling()`
-                # count past the run: exiting the block without finishing the run is quiet abandonment.
+            finally:
+                # On every exit path — translation above, a clean exit after user code swallowed a
+                # requested cancellation, a superseded driving task, or a non-cancellation error
+                # overtaking a requested cancel — an issued-but-unresolved cancellation must not
+                # leak an elevated `Task.cancelling()` count past the run: it would spuriously
+                # cancel unrelated later work on the task that drove the run.
                 graph_deps.cancellation.release_issued()
 
         async with AsyncExitStack() as stack:
@@ -1695,6 +1701,8 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
             # work on this task.
             graph_deps.cancellation.bind()
             stack.callback(graph_deps.cancellation.finish)
+            if cancellation_token is not None:
+                graph_deps.cancellation.attach_token(cancellation_token)
             self._resolve_and_store_metadata(agent_run.ctx, metadata)
 
             # Build RunContext for run lifecycle hooks
@@ -1793,7 +1801,7 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
                 # consumed the task's cancellation counter.
                 _utils.raise_if_cancelling()
                 if graph_deps.cancellation.cancel_requested:
-                    raise asyncio.CancelledError
+                    raise asyncio.CancelledError('pydantic-ai: re-asserting a requested run cancellation')
                 agent_run._result_override = r  # pyright: ignore[reportPrivateUsage]
                 _run_error = None
 
@@ -1835,12 +1843,10 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
                             # Skip CancelledError: it's expected cancellation propagation,
                             # and setting __context__ on it causes hangs on Python 3.10.
                             if not isinstance(_wrap_exc, asyncio.CancelledError) and _wrap_exc is not _run_error:
-                                _run_error.__context__ = (
-                                    _wrap_exc  # pragma: no cover — only fires for bugs in wrap_run implementations
-                                )
-                    elif (
-                        not _wrap_task.done()
-                    ):  # pragma: no branch — _run_done.set() can't complete _wrap_task synchronously
+                                # Only fires for bugs in `wrap_run` implementations.
+                                _run_error.__context__ = _wrap_exc  # pragma: no cover
+                    # `_run_done.set()` can't complete `_wrap_task` synchronously, so the task is always still pending here.
+                    elif not _wrap_task.done():  # pragma: no branch
                         _wrap_task.cancel()
                         try:
                             await _wrap_task
@@ -2973,7 +2979,8 @@ class Agent(AbstractAgent[AgentDepsT, OutputDataT]):
             for cap_ts in cap_toolsets if cap_toolsets is not None else self._cap_toolsets:
                 if isinstance(cap_ts, AbstractToolset):
                     toolsets.append(cap_ts)  # pyright: ignore[reportUnknownArgumentType]
-                else:  # pragma: no cover — get_toolset() always returns AbstractToolset
+                else:  # pragma: no cover
+                    # `get_toolset()` always returns an `AbstractToolset`.
                     toolsets.append(DynamicToolset(cap_ts))
 
         return toolsets

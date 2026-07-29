@@ -581,7 +581,49 @@ _(This example is complete, it can be run "as is")_
 
 ### Cancelling a Run
 
-A run in flight can be cancelled entirely -- e.g. when a user hits a "stop" button. Most applications cancel a plain [`agent.run()`][pydantic_ai.agent.AbstractAgent.run] with standard asyncio cancellation. The [`CancelledError`][asyncio.CancelledError] remains unchanged, while [`RunCancelled.from_cancellation()`][pydantic_ai.exceptions.RunCancelled.from_cancellation] provides the completed message history and usage so you can persist and resume the conversation:
+A run in flight can be cancelled entirely -- e.g. when a user hits a "stop" button. Create a [`CancellationToken`][pydantic_ai.CancellationToken], pass it to the run, and call `cancel()` from the stop handler. Cancellation raises [`RunCancelled`][pydantic_ai.exceptions.RunCancelled] with the completed message history and usage so you can persist and resume the conversation:
+
+```python {title="run_cancel.py"}
+import asyncio
+
+from pydantic_ai import Agent, CancellationToken, RunCancelled
+
+agent = Agent('test')
+tool_started = asyncio.Event()
+
+
+@agent.tool_plain
+async def slow_lookup() -> str:
+    tool_started.set()
+    await asyncio.sleep(10)
+    return 'result'
+
+
+async def main():
+    token = CancellationToken()
+    run = asyncio.create_task(
+        agent.run('Look something up', cancellation_token=token)
+    )
+    await tool_started.wait()
+    token.cancel()  # (1)!
+
+    try:
+        await run
+    except RunCancelled as exc:
+        messages = exc.all_messages()
+        print(f'Cancelled after {len(messages)} messages')
+        #> Cancelled after 2 messages
+        await agent.run(message_history=messages)  # (2)!
+```
+
+1. `cancel()` is idempotent and thread-safe. One token may govern multiple concurrent runs, cancelling all of them.
+2. [`RunCancelled.all_messages()`][pydantic_ai.exceptions.RunCancelled.all_messages] contains everything completed before cancellation, including completed tool results. Any dangling tool call is [repaired automatically](message-history.md#making-histories-provider-valid) when the history is resumed.
+
+_(This example is complete, it can be run "as is" -- you'll need to add `asyncio.run(main())` to run `main`)_
+
+[`agent.run_sync()`][pydantic_ai.agent.AbstractAgent.run_sync] accepts the same token. Calling `token.cancel()` from another thread is the only way to interrupt a synchronous run while it is blocked.
+
+When the surrounding environment cancels the run -- for example through `asyncio.timeout()`, a [`TaskGroup`][asyncio.TaskGroup], or application shutdown -- the [`CancelledError`][asyncio.CancelledError] remains unchanged. [`RunCancelled.from_cancellation()`][pydantic_ai.exceptions.RunCancelled.from_cancellation] provides the attached run state:
 
 ```python {title="run_external_cancel.py"}
 import asyncio
@@ -615,13 +657,13 @@ async def main():
         await agent.run(message_history=messages)  # (3)!
 ```
 
-1. Typically wired to a "stop" gesture such as a button or key handler.
+1. This demonstrates cancellation imposed by the surrounding asyncio environment. For application stop gestures, prefer a `CancellationToken`.
 2. External cancellation is never converted: `asyncio.timeout()`, [`TaskGroup`][asyncio.TaskGroup], and [Temporal](durable_execution/temporal.md) cancellation semantics are preserved. The run state rides along on the original `CancelledError`.
 3. [`RunCancelled.all_messages()`][pydantic_ai.exceptions.RunCancelled.all_messages] contains everything completed before cancellation, including completed tool results. Any dangling tool call is [repaired automatically](message-history.md#making-histories-provider-valid) when the history is resumed.
 
 _(This example is complete, it can be run "as is" -- you'll need to add `asyncio.run(main())` to run `main`)_
 
-On Python 3.10, asyncio recreates `CancelledError` across an `await task` boundary, so the attached state is only available when the error is caught directly inside the cancelled task. [`capture_run_messages()`][pydantic_ai.agent.capture_run_messages] is the version-universal fallback when only history is needed.
+On Python 3.10, asyncio recreates `CancelledError` across an `await task` boundary, but chains the original exception -- carrying the attached run state -- via `__context__`, which `from_cancellation()` traverses. The chain is attached only to the first `await` of the cancelled task, so later awaits of the same task see an unchained exception; [`capture_run_messages()`][pydantic_ai.agent.capture_run_messages] is the fallback when only history is needed.
 
 When consuming [`run_stream_events()`][pydantic_ai.agent.AbstractAgent.run_stream_events], the yielded [`AgentRunEvents`][pydantic_ai.agent.AgentRunEvents] handle offers a first-party alternative that needs no task juggling: [`AgentRunEvents.cancel()`][pydantic_ai.agent.AgentRunEvents.cancel] is safe to call from another task (e.g. a UI's "stop" handler) and surfaces as `RunCancelled` on continued iteration:
 
@@ -878,6 +920,29 @@ except UsageLimitExceeded as e:
     - The `tool_calls_limit` is checked before executing tool calls. If the model returns parallel tool calls that would exceed the limit, no tools will be executed.
 
 Tools and [capabilities](capabilities/overview.md) can read the run's limits from [`ctx.usage_limits`][pydantic_ai.tools.RunContext.usage_limits] (alongside [`ctx.usage`][pydantic_ai.tools.RunContext.usage] for usage so far), so a budget-aware tool or capability can disclose or adapt to the remaining budget without being configured with a duplicate copy of the limits. It reflects what the run is already enforcing and is read-only by convention.
+
+##### Limiting per-request input size
+
+The token limits above are cumulative across the whole run. To instead cap the size of any single request's input (the context window actually sent to the model), use `per_request_input_tokens_limit`. This is useful when prompt caching makes cumulative input a poor proxy for cost: re-sent cached prefixes are cheap, while a single oversized context is what degrades model performance and drives cache-miss cost.
+
+```py
+from pydantic_ai import Agent, UsageLimitExceeded, UsageLimits
+
+agent = Agent('anthropic:claude-sonnet-4-6')
+
+try:
+    agent.run_sync(
+        'What is the capital of Italy? Answer with just the city.',
+        usage_limits=UsageLimits(per_request_input_tokens_limit=10),
+    )
+except UsageLimitExceeded as e:
+    print(e)
+    """
+    Exceeded the per_request_input_tokens_limit of 10 (request_input_tokens=62). Consider raising the limit, or see the docs on usage limits for budget-aware patterns: https://ai.pydantic.dev/agent/#usage-limits
+    """
+```
+
+By default the limit is checked against the provider-reported input tokens after the response, so the oversized request is still sent and billed (matching `input_tokens_limit`). Set `count_tokens_before_request=True` to run a token-counting pass and enforce the limit before the request is sent.
 
 #### Model (Run) Settings
 
@@ -1402,6 +1467,8 @@ Pydantic AI's instrumentation is built on [OpenTelemetry](https://opentelemetry.
 If models behave unexpectedly (e.g., the retry limit is exceeded, or their API returns `503`), agent runs will raise [`UnexpectedModelBehavior`][pydantic_ai.exceptions.UnexpectedModelBehavior].
 
 In these cases, [`capture_run_messages`][pydantic_ai.capture_run_messages] can be used to access the messages exchanged during the run to help diagnose the issue.
+
+For a run that was cancelled rather than failed, [`RunCancelled`][pydantic_ai.exceptions.RunCancelled] and [`RunCancelled.from_cancellation()`][pydantic_ai.exceptions.RunCancelled.from_cancellation] carry the run's history directly -- see [Cancelling a Run](#cancelling-a-run).
 
 ```python {title="agent_model_errors.py"}
 from pydantic_ai import Agent, ModelRetry, UnexpectedModelBehavior, capture_run_messages

@@ -24,7 +24,7 @@ from pydantic_ai.toolsets._capability_owned import CapabilityOwnedToolset
 from pydantic_ai.toolsets._dynamic import DynamicToolset
 
 from ._runtime_toolsets import RuntimeToolsetKind, reject_unsupported_runtime_toolsets
-from ._toolset import guard_run_context_enqueue
+from ._toolset import guard_run_context
 from ._utils import unwrap_model
 
 _MODEL_RESPONSE_STREAM_EVENT_TYPES = get_union_args(ModelResponseStreamEvent)
@@ -123,7 +123,8 @@ class BaseDurabilityCapability(AbstractCapability[AgentDepsT]):
             return
 
         construction_leaves: set[int] = set()
-        if self._agent is not None:  # pragma: no branch — `for_agent` always binds before a run
+        # `for_agent` always binds before a run.
+        if self._agent is not None:  # pragma: no branch
             for agent_toolset in self._agent.toolsets:
                 agent_toolset.apply(lambda leaf: construction_leaves.add(id(leaf)))
 
@@ -278,7 +279,7 @@ class BaseDurabilityCapability(AbstractCapability[AgentDepsT]):
         there; Temporal reconstructs its context across the activity boundary and installs the
         same guard in `deserialize_run_context`.
         """
-        return guard_run_context_enqueue(
+        return guard_run_context(
             ctx, unit_noun=self._durable_unit_noun, container_noun=self._durable_container_noun
         )
 
@@ -416,7 +417,8 @@ class BaseDurabilityCapability(AbstractCapability[AgentDepsT]):
             return self._models_by_id['default']
         agent = run_context.agent
         root_capability = run_context.root_capability
-        if agent is not None and root_capability is not None:  # pragma: no branch - the boundary carries both
+        # The boundary carries both.
+        if agent is not None and root_capability is not None:  # pragma: no branch
             resolution_ctx = ModelResolutionContext(agent=agent, deps=run_context.deps)
             # Exceptions raised by user resolvers in the chain propagate unchanged;
             # only the `infer_model` backstop below gets the translated error.

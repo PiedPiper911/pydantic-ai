@@ -10,6 +10,8 @@ from typing import TYPE_CHECKING, Any
 import pydantic_core
 from pydantic_core import core_schema
 
+from ._warnings import PydanticAIDeprecationWarning as PydanticAIDeprecationWarning
+
 if sys.version_info < (3, 11):
     from exceptiongroup import ExceptionGroup as ExceptionGroup  # pragma: lax no cover
 else:
@@ -40,6 +42,7 @@ __all__ = (
     'ContentFilterError',
     'IncompleteToolCall',
     'MessageHistoryMutatedWarning',
+    'PydanticAIDeprecationWarning',
     'FallbackExceptionGroup',
     'ToolFailed',
 )
@@ -275,6 +278,9 @@ class RunCancelled(AgentRunError):
     `message_history` to a new run (with a new user prompt or not) to resume the conversation; any
     tool calls that never produced a result are automatically closed out with synthesized
     `outcome='interrupted'` returns before the history is sent to a model.
+
+    Cancellation is terminal: capability hooks (`wrap_run`, `wrap_node_run`, `on_run_error`) may
+    observe it and clean up, but cannot recover a cancelled run into a successful result.
     """
 
     def __init__(
@@ -319,10 +325,11 @@ class RunCancelled(AgentRunError):
         Passing a `RunCancelled` directly returns the same instance, providing uniform handling for
         first-party and external cancellation paths.
 
-        On Python 3.10, asyncio recreates `CancelledError` when crossing an `await task` boundary,
-        so the attachment survives only a direct catch within the cancelled task. Python 3.11+
-        preserves the exception instance. Use `capture_run_messages()` as the version-universal
-        fallback when only message history is needed.
+        Python 3.11+ preserves the exception instance across an `await task` boundary. Python 3.10
+        recreates the `CancelledError` there, but chains the original exception — and the attached
+        run state — via `__context__`, which this method traverses; the chain is attached only to
+        the first `await` of the cancelled task, so later awaits of the same task see an unchained
+        exception. Use `capture_run_messages()` as the fallback when only message history is needed.
         """
         pending = [exc]
         visited: set[int] = set()

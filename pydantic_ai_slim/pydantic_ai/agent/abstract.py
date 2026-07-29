@@ -26,7 +26,6 @@ from pydantic_graph import End
 
 from .. import (
     _agent_graph,
-    _cancel,
     _instructions,
     _utils,
     exceptions,
@@ -36,6 +35,7 @@ from .. import (
     tool_manager,
     usage as _usage,
 )
+from .._cancel import CancellationToken, RunBinding, provide_run_binding
 from .._json_schema import JsonSchema
 from .._output import types_from_output_spec
 from ..capabilities import AgentCapability
@@ -86,7 +86,7 @@ AgentMetadata = dict[str, Any] | Callable[[RunContext[AgentDepsT]], dict[str, An
 AgentInstructions = _instructions.AgentInstructions
 """Type alias for agent instructions — a string, `TemplateStr`, callable, or sequence thereof."""
 
-Instructions = AgentInstructions
+Instructions = AgentInstructions  # TODO(v3): remove the `Instructions` alias
 """Deprecated: use `AgentInstructions` instead."""
 
 AgentModelSettings = ModelSettings | Callable[[RunContext[AgentDepsT]], ModelSettings]
@@ -141,7 +141,7 @@ class AgentRunEvents(
 
     def __init__(self, run_agent: _RunStreamEventsRunner[OutputDataT]) -> None:
         self._run_agent = run_agent
-        self._binding = _cancel.RunBinding()
+        self._binding = RunBinding()
         self._receive_stream: (
             MemoryObjectReceiveStream[_messages.AgentStreamEvent | AgentRunResultEvent[OutputDataT]] | None
         ) = None
@@ -268,7 +268,7 @@ class AgentRunEvents(
         async def run_agent() -> AgentRunResult[OutputDataT]:
             # Closing the send stream on exit is what surfaces `EndOfStream` to the consumer once the run ends.
             async with send_stream:
-                with _cancel.provide_run_binding(self._binding):
+                with provide_run_binding(self._binding):
                     result = await self._run_agent(event_stream_handler)
                 # This background task owns the run: if a step absorbed an external cancellation
                 # of this task, re-assert it here so a cancelled run never yields a normal
@@ -412,7 +412,8 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
             usage: Optional usage to expose as `RunContext.usage`.
             model_settings: Optional settings to expose as `RunContext.model_settings`.
         """
-        return []  # pragma: no cover — concrete subclasses override this
+        # Concrete subclasses override this.
+        return []  # pragma: no cover
 
     def output_json_schema(self, output_type: OutputSpec[OutputDataT | RunOutputDataT] | None = None) -> JsonSchema:
         """The output return JSON schema."""
@@ -451,6 +452,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -476,6 +478,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -500,6 +503,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -541,6 +545,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 that receives [`RunContext`][pydantic_ai.tools.RunContext] and returns settings.
                 Callables are called before each model request, allowing dynamic per-step settings.
             usage_limits: Optional limits on model request count or token usage.
+            cancellation_token: Token used to cancel this run from another task or thread.
             usage: Optional usage to start with, useful for resuming a conversation or agents used in tools.
             metadata: Optional metadata to attach to this run. Accepts a dictionary or a callable taking
                 [`RunContext`][pydantic_ai.tools.RunContext]; merged with the agent's configured metadata.
@@ -574,6 +579,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
             deps=deps,
             model_settings=model_settings,
             usage_limits=usage_limits,
+            cancellation_token=cancellation_token,
             usage=usage,
             metadata=metadata,
             retries=retries,
@@ -645,6 +651,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -670,6 +677,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -694,6 +702,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -734,6 +743,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 that receives [`RunContext`][pydantic_ai.tools.RunContext] and returns settings.
                 Callables are called before each model request, allowing dynamic per-step settings.
             usage_limits: Optional limits on model request count or token usage.
+            cancellation_token: Token used to cancel this run from another task or thread.
             usage: Optional usage to start with, useful for resuming a conversation or agents used in tools.
             metadata: Optional metadata to attach to this run. Accepts a dictionary or a callable taking
                 [`RunContext`][pydantic_ai.tools.RunContext]; merged with the agent's configured metadata.
@@ -766,6 +776,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 deps=deps,
                 model_settings=model_settings,
                 usage_limits=usage_limits,
+                cancellation_token=cancellation_token,
                 usage=usage,
                 metadata=metadata,
                 retries=retries,
@@ -792,6 +803,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -817,6 +829,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -842,6 +855,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -890,6 +904,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 that receives [`RunContext`][pydantic_ai.tools.RunContext] and returns settings.
                 Callables are called before each model request, allowing dynamic per-step settings.
             usage_limits: Optional limits on model request count or token usage.
+            cancellation_token: Token used to cancel this run from another task or thread.
             usage: Optional usage to start with, useful for resuming a conversation or agents used in tools.
             metadata: Optional metadata to attach to this run. Accepts a dictionary or a callable taking
                 [`RunContext`][pydantic_ai.tools.RunContext]; merged with the agent's configured metadata.
@@ -928,6 +943,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
             instructions=instructions,
             model_settings=model_settings,
             usage_limits=usage_limits,
+            cancellation_token=cancellation_token,
             usage=usage,
             metadata=metadata,
             retries=retries,
@@ -1093,6 +1109,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1117,6 +1134,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1140,6 +1158,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1196,6 +1215,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 that receives [`RunContext`][pydantic_ai.tools.RunContext] and returns settings.
                 Callables are called before each model request, allowing dynamic per-step settings.
             usage_limits: Optional limits on model request count or token usage.
+            cancellation_token: Token used to cancel this run from another task or thread.
             usage: Optional usage to start with, useful for resuming a conversation or agents used in tools.
             metadata: Optional metadata to attach to this run. Accepts a dictionary or a callable taking
                 [`RunContext`][pydantic_ai.tools.RunContext]; merged with the agent's configured metadata.
@@ -1229,6 +1249,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 deps=deps,
                 model_settings=model_settings,
                 usage_limits=usage_limits,
+                cancellation_token=cancellation_token,
                 usage=usage,
                 metadata=metadata,
                 retries=retries,
@@ -1255,6 +1276,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1279,6 +1301,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1302,6 +1325,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1368,6 +1392,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 that receives [`RunContext`][pydantic_ai.tools.RunContext] and returns settings.
                 Callables are called before each model request, allowing dynamic per-step settings.
             usage_limits: Optional limits on model request count or token usage.
+            cancellation_token: Token used to cancel this run from another task or thread.
             usage: Optional usage to start with, useful for resuming a conversation or agents used in tools.
             metadata: Optional metadata to attach to this run. Accepts a dictionary or a callable taking
                 [`RunContext`][pydantic_ai.tools.RunContext]; merged with the agent's configured metadata.
@@ -1400,6 +1425,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 deps=deps,
                 model_settings=model_settings,
                 usage_limits=usage_limits,
+                cancellation_token=cancellation_token,
                 usage=usage,
                 metadata=metadata,
                 retries=retries,
@@ -1427,6 +1453,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1451,6 +1478,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1476,6 +1504,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         deps: AgentDepsT = None,
         model_settings: AgentModelSettings[AgentDepsT] | None = None,
         usage_limits: _usage.UsageLimits | None = None,
+        cancellation_token: CancellationToken | None = None,
         usage: _usage.RunUsage | None = None,
         metadata: AgentMetadata[AgentDepsT] | None = None,
         retries: int | AgentRetries | None = None,
@@ -1562,6 +1591,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
                 that receives [`RunContext`][pydantic_ai.tools.RunContext] and returns settings.
                 Callables are called before each model request, allowing dynamic per-step settings.
             usage_limits: Optional limits on model request count or token usage.
+            cancellation_token: Token used to cancel this run from another task or thread.
             usage: Optional usage to start with, useful for resuming a conversation or agents used in tools.
             metadata: Optional metadata to attach to this run. Accepts a dictionary or a callable taking
                 [`RunContext`][pydantic_ai.tools.RunContext]; merged with the agent's configured metadata.
@@ -1681,7 +1711,7 @@ class AbstractAgent(Generic[AgentDepsT, OutputDataT], ABC):
         ```
 
         For per-agent configuration, use the
-        [`ThreadExecutor`][pydantic_ai.capabilities.ThreadExecutor] capability instead.
+        [`UseThreadExecutor`][pydantic_ai.capabilities.UseThreadExecutor] capability instead.
 
         Args:
             executor: The executor to use for running sync functions.

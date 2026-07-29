@@ -24,15 +24,26 @@ import pickle
 import sys
 import threading
 from collections.abc import AsyncIterable
+from datetime import timezone
 from typing import Any
 
 import anyio
 import pytest
 from anyio import to_thread
 from anyio.from_thread import start_blocking_portal
+from inline_snapshot import snapshot
 
-from pydantic_ai import Agent, AgentRunEvents, AgentRunResultEvent, RunCancelled, UserError, capture_run_messages
+from pydantic_ai import (
+    Agent,
+    AgentRunEvents,
+    AgentRunResultEvent,
+    CancellationToken,
+    RunCancelled,
+    UserError,
+    capture_run_messages,
+)
 from pydantic_ai._cancel import RunCancellation
+from pydantic_ai._utils import BaseExceptionGroup
 from pydantic_ai.capabilities import AbstractCapability
 from pydantic_ai.messages import (
     AgentStreamEvent,
@@ -47,9 +58,11 @@ from pydantic_ai.messages import (
 )
 from pydantic_ai.models.function import AgentInfo, FunctionModel
 from pydantic_ai.models.test import TestModel
-from pydantic_ai.run import AgentRunResult
+from pydantic_ai.run import AgentRun, AgentRunResult
 from pydantic_ai.tools import RunContext
-from pydantic_ai.usage import RunUsage
+from pydantic_ai.usage import RequestUsage, RunUsage
+
+from .conftest import IsNow, IsStr
 
 pytestmark = pytest.mark.anyio
 
@@ -146,6 +159,131 @@ async def test_consumed_cancellation_is_not_a_false_positive():
 
 
 # --- First-party cancellation: `AgentRun.cancel()` / `RunContext.cancel_run()` ---
+
+
+async def test_cancellation_token_from_sibling_task():
+    started = asyncio.Event()
+
+    async def model_function(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError
+
+    token = CancellationToken()
+    task = asyncio.create_task(Agent(FunctionModel(model_function)).run('hello', cancellation_token=token))
+    await started.wait()
+    token.cancel()
+
+    with pytest.raises(RunCancelled) as exc_info:
+        await task
+    assert [type(message).__name__ for message in exc_info.value.all_messages()] == ['ModelRequest']
+    assert token.cancelled
+
+
+async def test_pre_cancelled_token_does_not_start_run():
+    called = False
+
+    async def model_function(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal called
+        called = True
+        raise AssertionError
+
+    token = CancellationToken()
+    token.cancel()
+
+    with pytest.raises(RunCancelled) as exc_info:
+        await Agent(FunctionModel(model_function)).run('hello', cancellation_token=token)
+    assert exc_info.value.all_messages() == []
+    assert not called
+
+
+async def test_one_token_cancels_two_runs():
+    started = 0
+    both_started = asyncio.Event()
+
+    async def model_function(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        nonlocal started
+        started += 1
+        if started == 2:
+            both_started.set()
+        await asyncio.Event().wait()
+        raise AssertionError
+
+    token = CancellationToken()
+    agent = Agent(FunctionModel(model_function))
+    tasks = [asyncio.create_task(agent.run(str(index), cancellation_token=token)) for index in range(2)]
+    await both_started.wait()
+    token.cancel()
+
+    results = await asyncio.gather(*tasks, return_exceptions=True)
+    assert all(isinstance(result, RunCancelled) for result in results)
+
+
+async def test_late_token_cancel_does_not_affect_finished_task():
+    token = CancellationToken()
+    result = await Agent(TestModel()).run('hello', cancellation_token=token)
+    assert result.output
+
+    token.cancel()
+    await asyncio.sleep(0)
+    assert await asyncio.sleep(0, result='unrelated') == 'unrelated'
+
+
+async def test_token_accepted_by_iter_and_stream_surfaces():
+    for run_method in ('iter', 'run_stream', 'run_stream_events'):
+        token = CancellationToken()
+        token.cancel()
+        agent = Agent(TestModel())
+        context = getattr(agent, run_method)('hello', cancellation_token=token)
+        with pytest.raises(RunCancelled):
+            async with context as value:
+                if run_method == 'run_stream_events':
+                    async for _ in value:
+                        pass
+
+
+async def test_token_and_agent_run_cancel_are_idempotent():
+    token = CancellationToken()
+    agent = Agent(TestModel())
+
+    with pytest.raises(RunCancelled):
+        async with agent.iter('hello', cancellation_token=token) as agent_run:
+            agent_run.cancel()
+            token.cancel()
+            token.cancel()
+            async for _ in agent_run:
+                pass
+
+
+async def test_sync_tool_can_cancel_run_from_worker_thread():
+    agent = Agent(TestModel(call_tools=['stop']))
+
+    @agent.tool
+    def stop(ctx: RunContext) -> str:
+        ctx.cancel_run()
+        return 'stopped'
+
+    with pytest.raises(RunCancelled):
+        await agent.run('hello')
+
+
+async def test_run_sync_token_cancel_from_another_thread():
+    started = threading.Event()
+
+    async def model_function(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:
+        started.set()
+        await asyncio.Event().wait()
+        raise AssertionError
+
+    token = CancellationToken()
+    run_thread = asyncio.create_task(
+        asyncio.to_thread(Agent(FunctionModel(model_function)).run_sync, 'hello', cancellation_token=token)
+    )
+    await asyncio.to_thread(started.wait)
+    token.cancel()
+
+    with pytest.raises(RunCancelled):
+        await run_thread
 
 
 def test_run_cancelled_result_surface():
@@ -259,7 +397,8 @@ async def test_tool_cancels_run_and_history_is_resumable():
     """`ctx.cancel_run()` from a tool raises `RunCancelled` from `agent.run()`.
 
     The completed sibling tool's real result is preserved in an interrupted request on
-    `RunCancelled.all_messages()`, and resuming with that history plus a new prompt sends the model a
+    `RunCancelled.all_messages()`. The snapshot survives a `ModelMessagesTypeAdapter` JSON
+    round-trip, and resuming from the restored copy plus a new prompt sends the model a
     provider-valid transcript: the real return, exactly one synthesized `'interrupted'` return
     for the cancelled call, and the new prompt.
     """
@@ -278,23 +417,70 @@ async def test_tool_cancels_run_and_history_is_resumable():
     assert error.metadata == {'customer': '123'}
     assert error.run_id is not None
     assert error.conversation_id is not None
-    assert [(type(m).__name__, getattr(m, 'state', None)) for m in messages] == [
-        ('ModelRequest', 'complete'),
-        ('ModelResponse', 'complete'),
-        ('ModelRequest', 'interrupted'),
-    ]
-    (fast_return,) = messages[-1].parts
-    assert isinstance(fast_return, ToolReturnPart)
-    assert fast_return.tool_name == 'fast_tool'
-    assert fast_return.content == 'fast result'
+    assert messages == snapshot(
+        [
+            ModelRequest(
+                parts=[UserPromptPart(content='go', timestamp=IsNow(tz=timezone.utc))],
+                timestamp=IsNow(tz=timezone.utc),
+                run_id=IsStr(),
+                conversation_id=IsStr(),
+            ),
+            ModelResponse(
+                parts=[
+                    ToolCallPart(tool_name='fast_tool', args={}, tool_call_id='call_fast'),
+                    ToolCallPart(tool_name='cancelling_tool', args={}, tool_call_id='call_slow'),
+                ],
+                usage=RequestUsage(input_tokens=51, output_tokens=4),
+                model_name='function:model_func:',
+                timestamp=IsNow(tz=timezone.utc),
+                run_id=IsStr(),
+                conversation_id=IsStr(),
+            ),
+            ModelRequest(
+                parts=[
+                    ToolReturnPart(
+                        tool_name='fast_tool',
+                        content='fast result',
+                        tool_call_id='call_fast',
+                        timestamp=IsNow(tz=timezone.utc),
+                    )
+                ],
+                timestamp=IsNow(tz=timezone.utc),
+                run_id=IsStr(),
+                conversation_id=IsStr(),
+                state='interrupted',
+            ),
+        ]
+    )
 
-    result = await agent.run('never mind, wrap up', message_history=messages)
+    restored = ModelMessagesTypeAdapter.validate_json(error.all_messages_json())
+    assert restored == messages
+
+    result = await agent.run('never mind, wrap up', message_history=restored)
     assert result.output == 'done'
     resumed_request = seen_by_model[-1][-1]
-    returns = [p for p in resumed_request.parts if isinstance(p, ToolReturnPart)]
-    assert [(r.tool_name, r.outcome) for r in returns] == [('fast_tool', 'success'), ('cancelling_tool', 'interrupted')]
-    synthesized = returns[-1]
-    assert synthesized.metadata == {'pydantic_ai_synthesized_tool_return': True}
+    assert resumed_request == snapshot(
+        ModelRequest(
+            parts=[
+                ToolReturnPart(
+                    tool_name='fast_tool',
+                    content='fast result',
+                    tool_call_id='call_fast',
+                    timestamp=IsNow(tz=timezone.utc),
+                ),
+                ToolReturnPart(
+                    tool_name='cancelling_tool',
+                    content='The tool call was interrupted before a result was produced.',
+                    tool_call_id='call_slow',
+                    metadata={'pydantic_ai_synthesized_tool_return': True},
+                    timestamp=IsNow(tz=timezone.utc),
+                    outcome='interrupted',
+                ),
+                UserPromptPart(content='never mind, wrap up', timestamp=IsNow(tz=timezone.utc)),
+            ],
+            timestamp=IsNow(tz=timezone.utc),
+        )
+    )
 
 
 async def test_agent_run_cancel_from_another_task():
@@ -310,7 +496,7 @@ async def test_agent_run_cancel_from_another_task():
         await asyncio.sleep(READINESS_WAIT_TIMEOUT)
         return 'slow'  # pragma: no cover
 
-    runs: list[Any] = []
+    runs: list[AgentRun[None, str]] = []
 
     async def drive():
         async with agent.iter('go') as agent_run:
@@ -362,6 +548,25 @@ async def test_iter_swallowed_cancellation_is_quiet_abandonment():
 
 
 @requires_task_cancelling
+async def test_cancel_followed_by_other_error_releases_cancellation():
+    """A run that ends with a non-cancellation error after `cancel()` was issued must release the
+    issued cancellation: leaking it would spuriously cancel unrelated later work on the task."""
+    agent = Agent(TestModel())
+
+    with pytest.raises(RuntimeError, match='overtaking error'):
+        async with agent.iter('go') as agent_run:
+            agent_run.cancel()
+            try:
+                await anext(agent_run)
+            except asyncio.CancelledError:
+                raise RuntimeError('overtaking error') from None
+
+    task = asyncio.current_task()
+    assert task is not None
+    assert _task_cancelling(task) == 0
+
+
+@requires_task_cancelling
 async def test_iter_reasserts_swallowed_cancellation_before_next_node():
     """A swallowed first-party cancellation stops iteration before another model call."""
     model_calls: list[None] = []
@@ -383,6 +588,37 @@ async def test_iter_reasserts_swallowed_cancellation_before_next_node():
                         pass
 
     assert len(model_calls) == 1
+
+
+@requires_task_cancelling
+async def test_external_cancel_uncancelled_by_caller_completes_run():
+    """A caller that catches an external cancellation inside the `async for` body and calls
+    `Task.uncancel()` — asyncio's sanctioned suppression — gets a completed run, without the
+    already-completed step re-executing (no duplicate model call, no duplicated history)."""
+    model_calls: list[None] = []
+
+    def model_function(_messages: list[ModelMessage], _info: AgentInfo) -> ModelResponse:
+        model_calls.append(None)
+        return ModelResponse(parts=[TextPart('done')])
+
+    agent = Agent(FunctionModel(model_function))
+    task = asyncio.current_task()
+    assert task is not None
+    cancelled_once = False
+
+    async with agent.iter('go') as agent_run:
+        async for _node in agent_run:
+            if len(model_calls) == 1 and not cancelled_once:
+                cancelled_once = True
+                task.cancel()
+                try:
+                    await asyncio.sleep(0)
+                except asyncio.CancelledError:
+                    _task_uncancel(task)
+
+    assert agent_run.result is not None
+    assert agent_run.result.output == 'done'
+    assert model_calls == [None]
 
 
 @requires_task_cancelling
@@ -451,6 +687,11 @@ async def test_run_cancellation_tracks_issuances_per_task():
     await task_a
     assert a_state == [(True, 0), (False, 1)]
 
+
+@requires_task_cancelling
+async def test_release_issued_on_finished_task_is_noop():
+    """Releasing issued cancellations for a task that already finished, and releasing an already-empty
+    controller, are no-ops — a controller unit test because the public API can't trigger it deterministically."""
     done_cancellation = RunCancellation()
     done_bound = asyncio.Event()
 
@@ -471,6 +712,11 @@ async def test_run_cancellation_tracks_issuances_per_task():
     done_cancellation.release_issued()
     done_cancellation.release_issued()  # clearing an already-empty controller is a no-op
 
+
+@requires_task_cancelling
+async def test_cancel_before_bind_delivers_on_bind():
+    """A cancellation requested before any task is bound is delivered as soon as one binds — a controller
+    unit test because the public API can't trigger it deterministically."""
     unbound_cancellation = RunCancellation()
     unbound_cancellation.cancel()
     rebound_cancelled = asyncio.Event()
@@ -489,6 +735,11 @@ async def test_run_cancellation_tracks_issuances_per_task():
     await rebound_cancelled.wait()
     await rebound_task
 
+
+@requires_task_cancelling
+async def test_swallowed_and_uncancelled_request_redelivers_on_rebind():
+    """A request whose cancellation was swallowed and `uncancel()`ed is redelivered when the task rebinds — a
+    controller unit test because the public API can't trigger it deterministically."""
     uncancelled_cancellation = RunCancellation()
     uncancelled_bound = asyncio.Event()
     keep_uncancelled_task_live = asyncio.Event()
@@ -558,10 +809,10 @@ async def test_external_cancellation_is_never_translated():
         await asyncio.wait_for(asyncio.shield(task), timeout=READINESS_WAIT_TIMEOUT)
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11), reason='`CancelledError` instance preservation across `await task` needs Python 3.11+'
-)
 async def test_task_cancel_of_run_carries_run_cancelled():
+    """On 3.11+ the attached `CancelledError` instance itself crosses `await task`; on 3.10
+    asyncio recreates it but chains the original via `__context__`, which `from_cancellation()`
+    traverses — so the state is recoverable on all supported versions."""
     started = asyncio.Event()
     agent = Agent(TestModel())
 
@@ -580,11 +831,25 @@ async def test_task_cancel_of_run_carries_run_cancelled():
 
     cancelled = RunCancelled.from_cancellation(exc_info.value)
     assert cancelled is not None
-    assert [type(message) for message in cancelled.all_messages()] == [ModelRequest, ModelResponse]
-    response = cancelled.all_messages()[1]
-    assert isinstance(response, ModelResponse)
-    assert len(response.parts) == 1
-    assert isinstance(response.parts[0], ToolCallPart)
+    assert cancelled.all_messages() == snapshot(
+        [
+            ModelRequest(
+                parts=[UserPromptPart(content='go', timestamp=IsNow(tz=timezone.utc))],
+                timestamp=IsNow(tz=timezone.utc),
+                run_id=IsStr(),
+                conversation_id=IsStr(),
+            ),
+            ModelResponse(
+                parts=[ToolCallPart(tool_name='slow_tool', args={}, tool_call_id='pyd_ai_tool_call_id__slow_tool')],
+                usage=RequestUsage(input_tokens=51, output_tokens=2),
+                model_name='test',
+                timestamp=IsNow(tz=timezone.utc),
+                provider_name='test',
+                run_id=IsStr(),
+                conversation_id=IsStr(),
+            ),
+        ]
+    )
     assert cancelled.usage.requests == 1
     assert cancelled.run_id is not None
     assert task.cancelled()
@@ -643,11 +908,66 @@ async def test_from_cancellation_through_asyncio_timeout():
             timeout_scope.append(scope)
             await agent.run('go')
 
-    assert isinstance(exc_info.value, TimeoutError)
     cancelled = RunCancelled.from_cancellation(exc_info.value)
     assert cancelled is not None
     assert [type(message) for message in cancelled.all_messages()] == [ModelRequest, ModelResponse]
     assert started.is_set()
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason='`asyncio.timeout()` needs Python 3.11+')
+async def test_first_party_cancel_inside_asyncio_timeout_leaves_scope_intact():
+    """A first-party cancellation consumes only its own cancellation: an enclosing
+    `asyncio.timeout()` neither trips into `TimeoutError` nor inherits a stray
+    `Task.cancelling()` count."""
+    agent = Agent(TestModel())
+
+    @agent.tool
+    async def cancelling_tool(ctx: RunContext) -> str:
+        ctx.cancel_run()
+        await asyncio.sleep(READINESS_WAIT_TIMEOUT)
+        return 'never reached'  # pragma: no cover
+
+    task = asyncio.current_task()
+    assert task is not None
+    # Baseline-relative: the shared anyio runner task can carry a stray count from an earlier
+    # test hitting CPython 3.11/3.12's `TaskGroup.__aexit__` uncancel leak (fixed in 3.13).
+    baseline = _task_cancelling(task)
+
+    with pytest.raises(RunCancelled):
+        async with asyncio.timeout(READINESS_WAIT_TIMEOUT):  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType]
+            await agent.run('go')
+
+    assert _task_cancelling(task) == baseline
+
+
+@pytest.mark.skipif(sys.version_info < (3, 11), reason='`asyncio.TaskGroup` needs Python 3.11+')
+async def test_first_party_cancel_inside_task_group_is_application_error():
+    """Inside a `TaskGroup`, a first-party cancellation surfaces as an ordinary application error
+    (`RunCancelled` inside the group's `ExceptionGroup`), not as a cleanly-cancelled child.
+
+    The no-stray-count half of the isolation contract is pinned by the `asyncio.timeout()`
+    sibling test: on CPython 3.11/3.12 `TaskGroup.__aexit__` itself leaks its own uncancel when
+    a child errors while the parent waits in `__aexit__` (fixed in 3.13), so the host task's
+    count cannot be asserted here — the leak is drained below instead so it can't poison later
+    tests on the shared runner task."""
+    agent = Agent(TestModel())
+
+    @agent.tool
+    async def cancelling_tool(ctx: RunContext) -> str:
+        ctx.cancel_run()
+        await asyncio.sleep(READINESS_WAIT_TIMEOUT)
+        return 'never reached'  # pragma: no cover
+
+    with pytest.raises(BaseExceptionGroup) as exc_info:
+        async with asyncio.TaskGroup() as tg:  # pyright: ignore[reportAttributeAccessIssue, reportUnknownMemberType, reportUnknownVariableType]
+            tg.create_task(agent.run('go'))  # pyright: ignore[reportUnknownMemberType]
+
+    assert [type(exc) for exc in exc_info.value.exceptions] == [RunCancelled]
+
+    task = asyncio.current_task()
+    assert task is not None
+    while _task_cancelling(task) > 0:  # pragma: lax no cover
+        _task_uncancel(task)
 
 
 def test_from_cancellation_identity_and_none():
@@ -670,10 +990,8 @@ def test_from_cancellation_cycle_safe():
     assert RunCancelled.from_cancellation(first) is None
 
 
-@pytest.mark.skipif(
-    sys.version_info < (3, 11), reason='`CancelledError` instance preservation across `await task` needs Python 3.11+'
-)
 async def test_iter_external_cancel_carries_run_cancelled():
+    """As `test_task_cancel_of_run_carries_run_cancelled`, on the `agent.iter()` driving path."""
     started = asyncio.Event()
     agent = Agent(TestModel())
 
@@ -714,7 +1032,7 @@ async def test_external_cancellation_wins_race_with_first_party_cancel():
         await asyncio.sleep(READINESS_WAIT_TIMEOUT)
         return 'slow'  # pragma: no cover
 
-    runs: list[Any] = []
+    runs: list[AgentRun[None, str]] = []
 
     async def drive():
         async with agent.iter('go') as agent_run:
@@ -744,7 +1062,7 @@ async def test_external_cancellation_wins_when_it_arrives_first():
         await asyncio.sleep(READINESS_WAIT_TIMEOUT)
         return 'slow'  # pragma: no cover
 
-    runs: list[Any] = []
+    runs: list[AgentRun[None, str]] = []
 
     async def drive():
         async with agent.iter('go') as agent_run:
@@ -779,7 +1097,8 @@ async def test_cancel_run_under_run_stream_events():
             async for event in stream:
                 events.append(type(event).__name__)
 
-    assert events  # events streamed before the cancellation are delivered
+    # events streamed before the cancellation are delivered
+    assert events == snapshot(['PartStartEvent', 'PartEndEvent', 'FunctionToolCallEvent'])
 
 
 async def test_run_stream_events_cancel_mid_iteration():
@@ -1290,7 +1609,7 @@ async def test_run_capabilities_cannot_recover_cancellation(first_party: bool):
         await asyncio.sleep(READINESS_WAIT_TIMEOUT)
         return 'slow'  # pragma: no cover
 
-    runs: list[Any] = []
+    runs: list[AgentRun[None, str]] = []
 
     async def drive() -> AgentRunResult:
         async with agent.iter('go') as agent_run:

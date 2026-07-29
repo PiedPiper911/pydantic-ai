@@ -433,6 +433,37 @@ async def test_anthropic_20260318_web_search_response_inclusion(
 
 
 @pytest.mark.vcr()
+async def test_anthropic_20260318_web_search_response_inclusion_stream(
+    allow_model_requests: None, anthropic_api_key: str, vcr: Cassette
+):
+    """Streaming with `'excluded'`: consumed search pairs are absent from the streamed message parts too."""
+    m = AnthropicModel('claude-sonnet-4-6', provider=AnthropicProvider(api_key=anthropic_api_key))
+    agent = Agent(m, capabilities=[NativeTool(WebSearchTool(response_inclusion='excluded'))])
+
+    async with agent.run_stream(
+        "In code execution, use web_search with the query 'site:ai.pydantic.dev Pydantic AI' "
+        'and reply with the first result title.'
+    ) as result:
+        output = await result.get_output()
+
+    assert output
+    assert [tool['type'] for tool in single_request_body(vcr)['tools']] == snapshot(['web_search_20260318'])
+    response_parts = [part for message in result.all_messages() for part in message.parts]
+    web_search_parts = [
+        part
+        for part in response_parts
+        if isinstance(part, NativeToolCallPart | NativeToolReturnPart) and part.tool_name == 'web_search'
+    ]
+    assert web_search_parts == []
+    code_execution_parts = [
+        part
+        for part in response_parts
+        if isinstance(part, NativeToolCallPart | NativeToolReturnPart) and part.tool_name == 'code_execution'
+    ]
+    assert [type(part) for part in code_execution_parts] == [NativeToolCallPart, NativeToolReturnPart]
+
+
+@pytest.mark.vcr()
 async def test_anthropic_supported_model_uses_20260318_web_tools(
     allow_model_requests: None, anthropic_api_key: str, vcr: Cassette
 ):

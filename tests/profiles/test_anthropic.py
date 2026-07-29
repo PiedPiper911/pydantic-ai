@@ -423,7 +423,7 @@ def test_model_profile_opus_5():
     Every flag below was verified live against the Anthropic API by probing `claude-opus-5`
     side by side with `claude-opus-4-8`: it accepts adaptive thinking, `low`/`medium`/`high`/
     `xhigh` effort, task budgets, json-schema output, forced `tool_choice`, tool search, the
-    advisor tool, code execution `20260120`, and web search/fetch `20260209`; it rejects
+    advisor tool, code execution `20260120`, and dynamic-filtering web search/fetch; it rejects
     budget-based thinking and sampling settings. Unlike Sonnet 5 it also supports
     `anthropic_speed='fast'` (the API returns a fast-mode quota error rather than the
     `does not support the 'speed' parameter` 400 that unsupported models return).

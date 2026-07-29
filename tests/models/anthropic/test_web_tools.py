@@ -23,7 +23,7 @@ from pydantic_ai.native_tools import SUPPORTED_NATIVE_TOOLS, AbstractNativeTool,
 
 from ..._inline_snapshot import snapshot
 from ...cassette_utils import single_request_body
-from ...conftest import TestEnv, try_import
+from ...conftest import IsStr, TestEnv, try_import
 from ..test_anthropic import (
     MockAnthropic,
     _mock_anthropic_client,  # pyright: ignore[reportPrivateUsage]
@@ -98,7 +98,6 @@ class ClientSupportCase:
     client_cls: Any
     base_url: str
     native_tools: list[AbstractNativeTool]
-    model_name: str = 'claude-sonnet-4-6'
     expected_tool_types: list[str] = field(default_factory=list[str])
     expected_betas: list[str] = field(default_factory=list[str])
     rejected_tool: type[AbstractNativeTool] | None = None
@@ -140,7 +139,8 @@ CLIENT_SUPPORT_CASES = [
         id='vertex-web-search',
         client_cls=AsyncAnthropicVertex,
         base_url='https://us-central1-aiplatform.googleapis.com',
-        native_tools=[WebSearchTool()],
+        # `response_inclusion` is dropped along with the dynamic tool version on this client.
+        native_tools=[WebSearchTool(response_inclusion='excluded')],
         expected_tool_types=['web_search_20250305'],
     ),
     ClientSupportCase(
@@ -176,7 +176,7 @@ def test_anthropic_web_tools_client_support(case: ClientSupportCase):
     matches the sibling tool-search tests in the Anthropic suite, which reach the same private helper.
     """
     m = AnthropicModel(
-        case.model_name,
+        'claude-sonnet-4-6',
         provider=AnthropicProvider(anthropic_client=_mock_anthropic_client(case.client_cls, case.base_url)),
     )
     params = ModelRequestParameters(native_tools=case.native_tools)
@@ -213,36 +213,24 @@ def test_anthropic_web_tools_client_support(case: ClientSupportCase):
     assert sorted(beta_features) == case.expected_betas
 
 
-@pytest.mark.parametrize(
-    'tool, option',
-    [
-        pytest.param(
-            WebSearchTool(response_inclusion='excluded'), 'response_inclusion', id='search-response-inclusion'
-        ),
-        pytest.param(WebFetchTool(use_cache=False), 'use_cache', id='fetch-use-cache'),
-        pytest.param(WebFetchTool(response_inclusion='excluded'), 'response_inclusion', id='fetch-response-inclusion'),
-    ],
-)
-def test_anthropic_previous_web_tools_reject_new_options(tool: AbstractNativeTool, option: str):
+def test_anthropic_previous_web_tools_ignore_new_options():
+    """`response_inclusion` / `use_cache` only exist on the dynamic-filtering wire types, so a model
+    that uses the earlier tool versions drops them, like other provider-specific options.
+
+    `_add_native_tools` is the internal entry point: the public `prepare_request` returns
+    `ModelRequestParameters`, not the wire tool dicts, so only the mapped payload can show the drop.
+    """
     m = AnthropicModel('claude-sonnet-4-5', provider=AnthropicProvider(api_key='test'))
-    params = ModelRequestParameters(native_tools=[tool])
+    params = ModelRequestParameters(
+        native_tools=[
+            WebSearchTool(response_inclusion='excluded'),
+            WebFetchTool(use_cache=False, response_inclusion='excluded'),
+        ]
+    )
 
-    with pytest.raises(UserError, match=rf'`{option}` is not supported by model'):
-        m._add_native_tools([], params, AnthropicModelSettings())  # pyright: ignore[reportPrivateUsage]
-
-
-def test_anthropic_web_options_allow_custom_provider_name():
-    class ProxyAnthropicProvider(AnthropicProvider):
-        @property
-        def name(self) -> str:
-            return 'my-anthropic-proxy'
-
-    m = AnthropicModel('claude-sonnet-4-6', provider=ProxyAnthropicProvider(api_key='test'))
-    params = ModelRequestParameters(native_tools=[WebFetchTool(use_cache=False)])
-
-    assert m.system == 'my-anthropic-proxy'
-    _, prepared = m.prepare_request(None, params)
-    assert prepared.native_tools == [WebFetchTool(use_cache=False)]
+    tools, _, _ = m._add_native_tools([], params, AnthropicModelSettings())  # pyright: ignore[reportPrivateUsage]
+    assert [tool.get('type') for tool in tools] == ['web_search_20250305', 'web_fetch_20250910']
+    assert all('response_inclusion' not in tool and 'use_cache' not in tool for tool in tools)
 
 
 def test_anthropic_explicit_profile_instance_narrows_web_tools():
@@ -442,6 +430,37 @@ async def test_anthropic_20260318_web_search_response_inclusion(
     assert [type(part) for part in code_execution_parts] == [NativeToolCallPart, NativeToolReturnPart]
     response_body = _single_response_body(vcr)
     assert response_body['usage']['server_tool_use'] == {'web_fetch_requests': 0, 'web_search_requests': 1}
+
+
+@pytest.mark.vcr()
+async def test_anthropic_supported_model_uses_20260318_web_tools(
+    allow_model_requests: None, anthropic_api_key: str, vcr: Cassette
+):
+    """Default (full) inclusion: web fetch results consumed by code execution round-trip with `caller` metadata."""
+    m = AnthropicModel('claude-sonnet-4-6', provider=AnthropicProvider(api_key=anthropic_api_key))
+    agent = Agent(m, capabilities=[NativeTool(WebSearchTool()), NativeTool(WebFetchTool())])
+
+    result = await agent.run('Use web fetch to read https://ai.pydantic.dev and reply with exactly the page title.')
+
+    assert result.output
+    assert [tool['type'] for tool in single_request_body(vcr)['tools']] == snapshot(
+        ['web_search_20260318', 'web_fetch_20260318']
+    )
+    response_parts = [part for message in result.all_messages() for part in message.parts]
+    web_fetch_parts = [
+        part
+        for part in response_parts
+        if isinstance(part, NativeToolCallPart | NativeToolReturnPart) and part.tool_name == 'web_fetch'
+    ]
+    assert len(web_fetch_parts) == 2
+    caller_details = [part.provider_details for part in web_fetch_parts]
+    assert caller_details == snapshot(
+        [
+            {'anthropic_caller': {'tool_id': IsStr(), 'type': 'code_execution_20260120'}},
+            {'anthropic_caller': {'tool_id': IsStr(), 'type': 'code_execution_20260120'}},
+        ]
+    )
+    assert caller_details[0] == caller_details[1]
 
 
 @pytest.mark.vcr()

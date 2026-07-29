@@ -605,11 +605,6 @@ class AnthropicModel(Model[AsyncAnthropicClient]):
             {WebSearchTool, CodeExecutionTool, WebFetchTool, MemoryTool, MCPServerTool, ToolSearchTool, AdvisorTool}
         )
 
-    def _validate_native_tools(self, native_tools: list[AbstractNativeTool]) -> None:
-        """Validate options against the Anthropic API, independent of a custom provider name."""
-        for tool in native_tools:
-            tool._validate_for_provider('anthropic')  # pyright: ignore[reportPrivateUsage]
-
     async def request(
         self,
         messages: list[ModelMessage],
@@ -1271,8 +1266,9 @@ class AnthropicModel(Model[AsyncAnthropicClient]):
             return 'regex'
         return strategy or 'bm25'
 
+    @staticmethod
     def _map_web_search_tool(
-        self, tool: WebSearchTool, supports_dynamic_filtering: bool
+        tool: WebSearchTool, supports_dynamic_filtering: bool
     ) -> BetaWebSearchTool20260318Param | BetaWebSearchTool20250305Param:
         user_location = BetaUserLocationParam(type='approximate', **tool.user_location) if tool.user_location else None
         if supports_dynamic_filtering:
@@ -1287,11 +1283,8 @@ class AnthropicModel(Model[AsyncAnthropicClient]):
             if tool.response_inclusion is not None:
                 web_search_tool['response_inclusion'] = tool.response_inclusion
             return web_search_tool
-        if tool.response_inclusion is not None:
-            raise UserError(
-                f'`response_inclusion` is not supported by model {self.model_name!r} or the configured Anthropic client. '
-                'Use a model and client that support Anthropic dynamic web tools.'
-            )
+        # `response_inclusion` only exists on the dynamic-filtering tool version; like other
+        # provider-specific options, it's ignored where the wire type can't carry it.
         return BetaWebSearchTool20250305Param(
             name='web_search',
             type='web_search_20250305',
@@ -1301,8 +1294,9 @@ class AnthropicModel(Model[AsyncAnthropicClient]):
             user_location=user_location,
         )
 
+    @staticmethod
     def _map_web_fetch_tool(
-        self, tool: WebFetchTool, supports_dynamic_filtering: bool
+        tool: WebFetchTool, supports_dynamic_filtering: bool
     ) -> tuple[BetaWebFetchTool20260318Param | BetaWebFetchTool20250910Param, str | None]:
         citations = BetaCitationsConfigParam(enabled=tool.enable_citations) if tool.enable_citations else None
         if supports_dynamic_filtering:
@@ -1323,16 +1317,8 @@ class AnthropicModel(Model[AsyncAnthropicClient]):
                 web_fetch_tool,
                 None,
             )
-        if tool.use_cache is not None:
-            raise UserError(
-                f'`use_cache` is not supported by model {self.model_name!r} or the configured Anthropic client. '
-                'Use a model and client that support Anthropic dynamic web tools.'
-            )
-        if tool.response_inclusion is not None:
-            raise UserError(
-                f'`response_inclusion` is not supported by model {self.model_name!r} or the configured Anthropic client. '
-                'Use a model and client that support Anthropic dynamic web tools.'
-            )
+        # `use_cache` and `response_inclusion` only exist on the dynamic-filtering tool version;
+        # like other provider-specific options, they're ignored where the wire type can't carry them.
         return (
             BetaWebFetchTool20250910Param(
                 name='web_fetch',

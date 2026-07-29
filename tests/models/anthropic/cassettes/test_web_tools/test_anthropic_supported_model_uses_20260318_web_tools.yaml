@@ -1,0 +1,441 @@
+interactions:
+- request:
+    headers:
+      accept:
+      - application/json
+      accept-encoding:
+      - gzip, deflate, br, zstd
+      connection:
+      - keep-alive
+      content-length:
+      - '551'
+      content-type:
+      - application/json
+      host:
+      - api.anthropic.com
+    method: POST
+    parsed_body:
+      max_tokens: 4096
+      messages:
+      - content:
+        - text: Use web fetch to read https://ai.pydantic.dev and reply with exactly the page title.
+          type: text
+        role: user
+      model: claude-sonnet-4-6
+      stream: false
+      tools:
+      - allowed_domains: null
+        blocked_domains: null
+        max_uses: null
+        name: web_search
+        type: web_search_20260318
+        user_location: null
+      - allowed_domains: null
+        blocked_domains: null
+        citations: null
+        max_content_tokens: null
+        max_uses: null
+        name: web_fetch
+        type: web_fetch_20260318
+    uri: https://api.anthropic.com/v1/messages?beta=true
+  response:
+    headers:
+      connection:
+      - keep-alive
+      content-length:
+      - '42675'
+      content-security-policy:
+      - default-src 'none'; frame-ancestors 'none'
+      content-type:
+      - application/json
+      strict-transport-security:
+      - max-age=31536000; includeSubDomains; preload
+      traceresponse:
+      - 00-0ae53b0082ed480373ad7a3577a77999-db8c097e5ecc3c66-01
+      transfer-encoding:
+      - chunked
+      vary:
+      - Accept-Encoding
+    parsed_body:
+      container:
+        expires_at: '2026-07-29T13:53:09.291837Z'
+        id: container_01Dh4BguCnBnxVsYqRggsGeW
+      content:
+      - id: srvtoolu_01Eu8JigguLdNuLC4BieQ7RN
+        input:
+          code: |2
+
+            import json
+
+            result = await web_fetch({"url": "https://ai.pydantic.dev"})
+            entry = json.loads(result)[0]
+            if entry.get("error_code"):
+                print("Error:", entry["error_code"])
+            else:
+                print("Title:", entry.get("title"))
+        name: code_execution
+        type: server_tool_use
+      - caller:
+          tool_id: srvtoolu_01Eu8JigguLdNuLC4BieQ7RN
+          type: code_execution_20260120
+        id: srvtoolu_011jEzBFkzv1q8zxTGXTJVs9
+        input:
+          url: https://ai.pydantic.dev
+        name: web_fetch
+        type: server_tool_use
+      - caller:
+          tool_id: srvtoolu_01Eu8JigguLdNuLC4BieQ7RN
+          type: code_execution_20260120
+        content:
+          content:
+            source:
+              data: "---\ncanonical: https://pydantic.dev/docs/ai/overview/\nmeta-astro-view-transitions-enabled: true\nmeta-astro-view-transitions-fallback:
+                animate\nmeta-generator: Starlight v0.41.4\nmeta-og:image: https://pydantic.dev/docs/og/ai/overview/index.png\nmeta-og:image:height:
+                630\nmeta-og:image:width: 1200\nmeta-og:locale: en\nmeta-og:site_name: Pydantic Docs\nmeta-og:title: Pydantic
+                AI\nmeta-og:type: article\nmeta-og:url: https://pydantic.dev/docs/ai/overview/\nmeta-twitter:card: summary_large_image\nmeta-twitter:image:
+                https://pydantic.dev/docs/og/ai/overview/index.png\nmeta-viewport: width=device-width, initial-scale=1\ntitle:
+                Pydantic AI | Pydantic Docs\n---\n  [Skip to content](#_top)\n\n [Docs Pydantic Docs](https://pydantic.dev/docs/)\n\n
+                [Pydantic Validation](https://pydantic.dev/docs/validation/latest/get-started/)[Pydantic AI](https://pydantic.dev/docs/ai/overview/)[Pydantic
+                Logfire](https://pydantic.dev/docs/logfire/)\n\n      Search  `CtrlK`\n\n  \n\n  \n\n  \n\n  \n\n [Pydantic
+                Validation](https://pydantic.dev/docs/validation/latest/get-started/)[Pydantic AI](https://pydantic.dev/docs/ai/overview/)[Pydantic
+                Logfire](https://pydantic.dev/docs/logfire/)\n\n Theme  \n\n  \n\n-  [Pydantic AI](https://pydantic.dev/docs/ai/overview/)\n-
+                \ [Installation](https://pydantic.dev/docs/ai/overview/install/)\n-  [Getting Help](https://pydantic.dev/docs/ai/overview/help/)\n-
+                \ [Troubleshooting](https://pydantic.dev/docs/ai/overview/troubleshooting/)\n-  [Coding Agent Skills](https://pydantic.dev/docs/ai/overview/coding-agent-skills/)\n-
+                \ [Pydantic AI Gateway](https://pydantic.dev/docs/ai/overview/gateway/)\n-  \n\n**Core Concepts**\n\n  *  [Agents](https://pydantic.dev/docs/ai/core-concepts/agent/)\n
+                \ *  [Dependencies](https://pydantic.dev/docs/ai/core-concepts/dependencies/)\n  *  [Output](https://pydantic.dev/docs/ai/core-concepts/output/)\n
+                \ *  [Multimodal Input](https://pydantic.dev/docs/ai/core-concepts/input/)\n  *  [Hooks](https://pydantic.dev/docs/ai/core-concepts/hooks/)\n
+                \ *  [Agent Specs](https://pydantic.dev/docs/ai/core-concepts/agent-spec/)\n  *  [Messages and chat history](https://pydantic.dev/docs/ai/core-concepts/message-history/)\n
+                \ *  [Direct Model Requests](https://pydantic.dev/docs/ai/core-concepts/direct/)\n\n-  \n\n**Models & Providers**\n\n
+                \ *  [Overview](https://pydantic.dev/docs/ai/models/overview/)\n  *  [HTTP Request Retries](https://pydantic.dev/docs/ai/models/http-request-retries/)\n
+                \ *  [OpenAI](https://pydantic.dev/docs/ai/models/openai/)\n  *  [Anthropic](https://pydantic.dev/docs/ai/models/anthropic/)\n
+                \ *  [Google](https://pydantic.dev/docs/ai/models/google/)\n  *  [xAI](https://pydantic.dev/docs/ai/models/xai/)\n
+                \ *  [Bedrock](https://pydantic.dev/docs/ai/models/bedrock/)\n  *  [Cerebras](https://pydantic.dev/docs/ai/models/cerebras/)\n
+                \ *  [Cohere](https://pydantic.dev/docs/ai/models/cohere/)\n  *  [Groq](https://pydantic.dev/docs/ai/models/groq/)\n
+                \ *  [Hugging Face](https://pydantic.dev/docs/ai/models/huggingface/)\n  *  [Mistral](https://pydantic.dev/docs/ai/models/mistral/)\n
+                \ *  [Ollama](https://pydantic.dev/docs/ai/models/ollama/)\n  *  [OpenRouter](https://pydantic.dev/docs/ai/models/openrouter/)\n
+                \ *  [Z.AI](https://pydantic.dev/docs/ai/models/zai/)\n\n-  \n\n**Tools & Toolsets**\n\n  *  [Function Tools](https://pydantic.dev/docs/ai/tools-toolsets/tools/)\n
+                \ *  [Advanced Tool Features](https://pydantic.dev/docs/ai/tools-toolsets/tools-advanced/)\n  *  [Toolsets](https://pydantic.dev/docs/ai/tools-toolsets/toolsets/)\n
+                \ *  [Deferred Tools](https://pydantic.dev/docs/ai/tools-toolsets/deferred-tools/)\n  *  [Native Tools](https://pydantic.dev/docs/ai/tools-toolsets/native-tools/)\n
+                \ *  [Common Tools](https://pydantic.dev/docs/ai/tools-toolsets/common-tools/)\n  *  [Third-Party Tools](https://pydantic.dev/docs/ai/tools-toolsets/third-party-tools/)\n\n-
+                \ \n\n**Capabilities**\n\n  *  [Overview](https://pydantic.dev/docs/ai/capabilities/overview/)\n  *  [On-Demand
+                Capabilities](https://pydantic.dev/docs/ai/capabilities/on-demand/)\n  *  [Building Custom Capabilities](https://pydantic.dev/docs/ai/capabilities/custom/)\n
+                \ *  [Thinking](https://pydantic.dev/docs/ai/capabilities/thinking/)\n  *  [Instrumentation](https://pydantic.dev/docs/ai/capabilities/instrumentation/)\n
+                \ *  [Web Search](https://pydantic.dev/docs/ai/capabilities/web-search/)\n  *  [Web Fetch](https://pydantic.dev/docs/ai/capabilities/web-fetch/)\n
+                \ *  [Image Generation](https://pydantic.dev/docs/ai/capabilities/image-generation/)\n  *  [X Search](https://pydantic.dev/docs/ai/capabilities/x-search/)\n
+                \ *  [MCP](https://pydantic.dev/docs/ai/capabilities/mcp/)\n  *  [Tool Search](https://pydantic.dev/docs/ai/capabilities/tool-search/)\n
+                \ *  [Compaction](https://pydantic.dev/docs/ai/capabilities/compaction/)\n  *  [Thread Executor](https://pydantic.dev/docs/ai/capabilities/thread-executor/)\n
+                \ *  [Select Model](https://pydantic.dev/docs/ai/capabilities/select-model/)\n  *  [Resolve Model ID](https://pydantic.dev/docs/ai/capabilities/resolve-model-id/)\n
+                \ *  [Prepare Tools](https://pydantic.dev/docs/ai/capabilities/prepare-tools/)\n  *  [Prefix Tools](https://pydantic.dev/docs/ai/capabilities/prefix-tools/)\n
+                \ *  [Include Tool Return Schemas](https://pydantic.dev/docs/ai/capabilities/include-tool-return-schemas/)\n
+                \ *  [Set Tool Metadata](https://pydantic.dev/docs/ai/capabilities/set-tool-metadata/)\n  *  [Raise Content
+                Filter Error](https://pydantic.dev/docs/ai/capabilities/raise-content-filter-error/)\n  *  [Reinject System
+                Prompt](https://pydantic.dev/docs/ai/capabilities/reinject-system-prompt/)\n  *  [Handle Deferred Tool Calls](https://pydantic.dev/docs/ai/capabilities/handle-deferred-tool-calls/)\n
+                \ *  [Process History](https://pydantic.dev/docs/ai/capabilities/process-history/)\n  *  [Process Event Stream](https://pydantic.dev/docs/ai/capabilities/process-event-stream/)\n
+                \ *  \n\n**Durable Execution**\n\n    +  [Overview](https://pydantic.dev/docs/ai/capabilities/durable_execution/overview/)\n
+                \   +  [Temporal](https://pydantic.dev/docs/ai/capabilities/durable_execution/temporal/)\n    +  [DBOS](https://pydantic.dev/docs/ai/capabilities/durable_execution/dbos/)\n
+                \   +  [Prefect](https://pydantic.dev/docs/ai/capabilities/durable_execution/prefect/)\n    +  [Restate](https://pydantic.dev/docs/ai/capabilities/durable_execution/restate/)\n
+                \   +  [Kitaru](https://pydantic.dev/docs/ai/capabilities/durable_execution/kitaru/)\n    +  [Apache Airflow](https://pydantic.dev/docs/ai/capabilities/durable_execution/airflow/)\n\n
+                \ *  [Third-Party Capabilities](https://pydantic.dev/docs/ai/capabilities/third-party/)\n\n-  \n\n**Pydantic
+                AI Harness**\n\n  *  [Overview](https://pydantic.dev/docs/ai/harness/)\n  *  [Code Mode](https://pydantic.dev/docs/ai/harness/code-mode/)\n
+                \ *  [FileSystem](https://pydantic.dev/docs/ai/harness/filesystem/)\n  *  [Shell](https://pydantic.dev/docs/ai/harness/shell/)\n
+                \ *  [Repo Context](https://pydantic.dev/docs/ai/harness/repo-context/)\n  *  [Pydantic AI Docs](https://pydantic.dev/docs/ai/harness/pydantic-ai-docs/)\n
+                \ *  [Exa Search](https://pydantic.dev/docs/ai/harness/exa-search/)\n  *  [Macroscope](https://pydantic.dev/docs/ai/harness/macroscope/)\n
+                \ *  [Compaction](https://pydantic.dev/docs/ai/harness/compaction/)\n  *  [Tool Output Limits](https://pydantic.dev/docs/ai/harness/tool-output-limits/)\n
+                \ *  [Warn On Cache Busts](https://pydantic.dev/docs/ai/harness/warn-on-cache-busts/)\n  *  [Step Persistence](https://pydantic.dev/docs/ai/harness/step-persistence/)\n
+                \ *  [Conversation Search](https://pydantic.dev/docs/ai/harness/conversation-search/)\n  *  [Media](https://pydantic.dev/docs/ai/harness/media/)\n
+                \ *  [Subagents](https://pydantic.dev/docs/ai/harness/subagents/)\n  *  [Dynamic Workflow](https://pydantic.dev/docs/ai/harness/dynamic-workflow/)\n
+                \ *  [Planning](https://pydantic.dev/docs/ai/harness/planning/)\n  *  [Memory](https://pydantic.dev/docs/ai/harness/memory/)\n
+                \ *  [Modal Sandbox](https://pydantic.dev/docs/ai/harness/modal-sandbox/)\n  *  [Capability Creation](https://pydantic.dev/docs/ai/harness/capability-creation/)\n
+                \ *  [Guardrails](https://pydantic.dev/docs/ai/harness/guardrails/)\n  *  [Managed Prompt](https://pydantic.dev/docs/ai/harness/managed-prompt/)\n
+                \ *  [LocalStack](https://pydantic.dev/docs/ai/harness/localstack/)\n  *  [Skills](https://pydantic.dev/docs/ai/harness/skills/)\n
+                \ *  [ACP](https://pydantic.dev/docs/ai/harness/acp/)\n\n-  [Extensibility](https://pydantic.dev/docs/ai/guides/extensibility/)\n-
+                \ [Multi-Agent Patterns](https://pydantic.dev/docs/ai/guides/multi-agent-applications/)\n-  [Web Chat UI](https://pydantic.dev/docs/ai/guides/web/)\n-
+                \ [Embeddings](https://pydantic.dev/docs/ai/guides/embeddings/)\n-  [Testing](https://pydantic.dev/docs/ai/guides/testing/)\n-
+                \ \n\n**MCP**\n\n  *  [Overview](https://pydantic.dev/docs/ai/mcp/overview/)\n  *  [Client](https://pydantic.dev/docs/ai/mcp/client/)\n
+                \ *  [Server](https://pydantic.dev/docs/ai/mcp/server/)\n\n-  \n\n**Pydantic Evals**\n\n  *  [Overview](https://pydantic.dev/docs/ai/evals/evals/)\n
+                \ *  \n\n**Getting Started**\n\n    +  [Quick Start](https://pydantic.dev/docs/ai/evals/getting-started/quick-start/)\n
+                \   +  [Core Concepts](https://pydantic.dev/docs/ai/evals/getting-started/core-concepts/)\n\n  *  \n\n**Evaluators**\n\n
+                \   +  [Overview](https://pydantic.dev/docs/ai/evals/evaluators/overview/)\n    +  [Built-in Evaluators](https://pydantic.dev/docs/ai/evals/evaluators/built-in/)\n
+                \   +  [LLM Judge](https://pydantic.dev/docs/ai/evals/evaluators/llm-judge/)\n    +  [Third-Party Integrations](https://pydantic.dev/docs/ai/evals/evaluators/framework-integrations/)\n
+                \   +  [Custom Evaluators](https://pydantic.dev/docs/ai/evals/evaluators/custom/)\n    +  [Report Evaluators](https://pydantic.dev/docs/ai/evals/evaluators/report-evaluators/)\n
+                \   +  [Span-Based](https://pydantic.dev/docs/ai/evals/evaluators/span-based/)\n    +  [Agentic Evaluators](https://pydantic.dev/docs/ai/evals/evaluators/agentic/)\n
+                \   +  [Standard Quality Metrics](https://pydantic.dev/docs/ai/evals/evaluators/standard-quality-metrics/)\n\n
+                \ *  [Online Evaluation](https://pydantic.dev/docs/ai/evals/online-evaluation/)\n  *  \n\n**How-To Guides**\n\n
+                \   +  [Logfire Integration](https://pydantic.dev/docs/ai/evals/how-to/logfire-integration/)\n    +  [Dataset
+                Management](https://pydantic.dev/docs/ai/evals/how-to/dataset-management/)\n    +  [Dataset Serialization](https://pydantic.dev/docs/ai/evals/how-to/dataset-serialization/)\n
+                \   +  [Concurrency & Performance](https://pydantic.dev/docs/ai/evals/how-to/concurrency/)\n    +  [Multi-Run
+                Evaluation](https://pydantic.dev/docs/ai/evals/how-to/multi-run/)\n    +  [Retry Strategies](https://pydantic.dev/docs/ai/evals/how-to/retry-strategies/)\n
+                \   +  [Metrics & Attributes](https://pydantic.dev/docs/ai/evals/how-to/metrics-attributes/)\n    +  [Case
+                Lifecycle Hooks](https://pydantic.dev/docs/ai/evals/how-to/lifecycle/)\n\n  *  [Simple Validation](https://pydantic.dev/docs/ai/evals/examples/simple-validation/)\n\n-
+                \ \n\n**Pydantic Graph**\n\n  *  [Overview](https://pydantic.dev/docs/ai/graph/graph/)\n  *  \n\n**Graph Builder**\n\n
+                \   +  [Getting Started](https://pydantic.dev/docs/ai/graph/builder/)\n    +  [Steps](https://pydantic.dev/docs/ai/graph/builder/steps/)\n
+                \   +  [Joins & Reducers](https://pydantic.dev/docs/ai/graph/builder/joins/)\n    +  [Decisions](https://pydantic.dev/docs/ai/graph/builder/decisions/)\n
+                \   +  [Parallel Execution](https://pydantic.dev/docs/ai/graph/builder/parallel/)\n\n-  \n\n**Integrations**\n\n
+                \ *  [Debugging & Monitoring with Pydantic Logfire](https://pydantic.dev/docs/ai/integrations/logfire/)\n
+                \ *  \n\n**UI Event Streams**\n\n    +  [Overview](https://pydantic.dev/docs/ai/integrations/ui/overview/)\n
+                \   +  [AG-UI](https://pydantic.dev/docs/ai/integrations/ui/ag-ui/)\n    +  [Vercel AI](https://pydantic.dev/docs/ai/integrations/ui/vercel-ai/)\n\n
+                \ *  [Command Line Interface (CLI)](https://pydantic.dev/docs/ai/integrations/cli/)\n\n-  \n\n**Examples**\n\n
+                \ *  [Setup](https://pydantic.dev/docs/ai/examples/setup/)\n  *  \n\n**Getting Started**\n\n    +  [Pydantic
+                Model](https://pydantic.dev/docs/ai/examples/getting-started/pydantic-model/)\n    +  [Weather Agent](https://pydantic.dev/docs/ai/examples/getting-started/weather-agent/)\n\n
+                \ *  \n\n**Conversational Agents**\n\n    +  [Chat App with FastAPI](https://pydantic.dev/docs/ai/examples/conversational-agents/chat-app/)\n
+                \   +  [Bank Support](https://pydantic.dev/docs/ai/examples/conversational-agents/bank-support/)\n\n  *  \n\n**Data
+                & Analytics**\n\n    +  [SQL Generation](https://pydantic.dev/docs/ai/examples/data-analytics/sql-gen/)\n
+                \   +  [Data Analyst](https://pydantic.dev/docs/ai/examples/data-analytics/data-analyst/)\n    +  [RAG](https://pydantic.dev/docs/ai/examples/data-analytics/rag/)\n\n
+                \ *  \n\n**Streaming**\n\n    +  [Stream Markdown](https://pydantic.dev/docs/ai/examples/streaming/stream-markdown/)\n
+                \   +  [Stream Whales](https://pydantic.dev/docs/ai/examples/streaming/stream-whales/)\n\n  *  [Complex Workflows](https://pydantic.dev/docs/ai/examples/flight-booking/)\n
+                \ *  [Business Applications](https://pydantic.dev/docs/ai/examples/slack-lead-qualifier/)\n  *  [UI Examples](https://pydantic.dev/docs/ai/examples/ag-ui/)\n\n-
+                \ \n\n**API Reference**\n\n  *  \n\n**pydantic_ai**\n\n    +  [agent](https://pydantic.dev/docs/ai/api/pydantic-ai/agent/)\n
+                \   +  [native_tools](https://pydantic.dev/docs/ai/api/pydantic-ai/native_tools/)\n    +  [capabilities](https://pydantic.dev/docs/ai/api/pydantic-ai/capabilities/)\n
+                \   +  [common_tools](https://pydantic.dev/docs/ai/api/pydantic-ai/common_tools/)\n    +  [concurrency](https://pydantic.dev/docs/ai/api/pydantic-ai/concurrency/)\n
+                \   +  [direct](https://pydantic.dev/docs/ai/api/pydantic-ai/direct/)\n    +  [durable_exec](https://pydantic.dev/docs/ai/api/pydantic-ai/durable_exec/)\n
+                \   +  [embeddings](https://pydantic.dev/docs/ai/api/pydantic-ai/embeddings/)\n    +  [exceptions](https://pydantic.dev/docs/ai/api/pydantic-ai/exceptions/)\n
+                \   +  [ext](https://pydantic.dev/docs/ai/api/pydantic-ai/ext/)\n    +  [format_prompt](https://pydantic.dev/docs/ai/api/pydantic-ai/format_prompt/)\n
+                \   +  [function_signature](https://pydantic.dev/docs/ai/api/pydantic-ai/function_signature/)\n    +  [mcp](https://pydantic.dev/docs/ai/api/pydantic-ai/mcp/)\n
+                \   +  [messages](https://pydantic.dev/docs/ai/api/pydantic-ai/messages/)\n    +  \n\n**models**\n\n      -
+                \ [anthropic](https://pydantic.dev/docs/ai/api/models/anthropic/)\n      -  [base](https://pydantic.dev/docs/ai/api/models/base/)\n
+                \     -  [bedrock](https://pydantic.dev/docs/ai/api/models/bedrock/)\n      -  [bedrock_mantle](https://pydantic.dev/docs/ai/api/models/bedrock_mantle/)\n
+                \     -  [cerebras](https://pydantic.dev/docs/ai/api/models/cerebras/)\n      -  [cohere](https://pydantic.dev/docs/ai/api/models/cohere/)\n
+                \     -  [fallback](https://pydantic.dev/docs/ai/api/models/fallback/)\n      -  [function](https://pydantic.dev/docs/ai/api/models/function/)\n
+                \     -  [google](https://pydantic.dev/docs/ai/api/models/google/)\n      -  [xai](https://pydantic.dev/docs/ai/api/models/xai/)\n
+                \     -  [groq](https://pydantic.dev/docs/ai/api/models/groq/)\n      -  [huggingface](https://pydantic.dev/docs/ai/api/models/huggingface/)\n
+                \     -  [instrumented](https://pydantic.dev/docs/ai/api/models/instrumented/)\n      -  [mcp-sampling](https://pydantic.dev/docs/ai/api/models/mcp-sampling/)\n
+                \     -  [mistral](https://pydantic.dev/docs/ai/api/models/mistral/)\n      -  [ollama](https://pydantic.dev/docs/ai/api/models/ollama/)\n
+                \     -  [openai](https://pydantic.dev/docs/ai/api/models/openai/)\n      -  [openrouter](https://pydantic.dev/docs/ai/api/models/openrouter/)\n
+                \     -  [test](https://pydantic.dev/docs/ai/api/models/test/)\n      -  [wrapper](https://pydantic.dev/docs/ai/api/models/wrapper/)\n\n
+                \   +  [output](https://pydantic.dev/docs/ai/api/pydantic-ai/output/)\n    +  [profiles](https://pydantic.dev/docs/ai/api/pydantic-ai/profiles/)\n
+                \   +  [providers](https://pydantic.dev/docs/ai/api/pydantic-ai/providers/)\n    +  [result](https://pydantic.dev/docs/ai/api/pydantic-ai/result/)\n
+                \   +  [retries](https://pydantic.dev/docs/ai/api/pydantic-ai/retries/)\n    +  [run](https://pydantic.dev/docs/ai/api/pydantic-ai/run/)\n
+                \   +  [settings](https://pydantic.dev/docs/ai/api/pydantic-ai/settings/)\n    +  [template](https://pydantic.dev/docs/ai/api/pydantic-ai/template/)\n
+                \   +  [tools](https://pydantic.dev/docs/ai/api/pydantic-ai/tools/)\n    +  [toolsets](https://pydantic.dev/docs/ai/api/pydantic-ai/toolsets/)\n
+                \   +  \n\n**ui**\n\n      -  [ag_ui](https://pydantic.dev/docs/ai/api/ui/ag_ui/)\n      -  [base](https://pydantic.dev/docs/ai/api/ui/base/)\n
+                \     -  [vercel_ai](https://pydantic.dev/docs/ai/api/ui/vercel_ai/)\n\n    +  [usage](https://pydantic.dev/docs/ai/api/pydantic-ai/usage/)\n\n
+                \ *  \n\n**pydantic_evals**\n\n    +  [pydantic_evals.dataset](https://pydantic.dev/docs/ai/api/pydantic_evals/dataset/)\n
+                \   +  [pydantic_evals.evaluators](https://pydantic.dev/docs/ai/api/pydantic_evals/evaluators/)\n    +  [pydantic_evals.lifecycle](https://pydantic.dev/docs/ai/api/pydantic_evals/lifecycle/)\n
+                \   +  [pydantic_evals.online](https://pydantic.dev/docs/ai/api/pydantic_evals/online/)\n    +  [pydantic_evals.online_capability](https://pydantic.dev/docs/ai/api/pydantic_evals/online_capability/)\n
+                \   +  [pydantic_evals.reporting](https://pydantic.dev/docs/ai/api/pydantic_evals/reporting/)\n    +  [pydantic_evals.otel](https://pydantic.dev/docs/ai/api/pydantic_evals/otel/)\n
+                \   +  [pydantic_evals.generation](https://pydantic.dev/docs/ai/api/pydantic_evals/generation/)\n\n  *  \n\n**pydantic_graph**\n\n
+                \   +  [pydantic_graph.basenode](https://pydantic.dev/docs/ai/api/pydantic_graph/basenode/)\n    +  [pydantic_graph.graph_builder](https://pydantic.dev/docs/ai/api/pydantic_graph/graph_builder/)\n
+                \   +  [pydantic_graph.step](https://pydantic.dev/docs/ai/api/pydantic_graph/step/)\n    +  [pydantic_graph.join](https://pydantic.dev/docs/ai/api/pydantic_graph/join/)\n
+                \   +  [pydantic_graph.decision](https://pydantic.dev/docs/ai/api/pydantic_graph/decision/)\n    +  [pydantic_graph.node](https://pydantic.dev/docs/ai/api/pydantic_graph/node/)\n
+                \   +  [pydantic_graph.util](https://pydantic.dev/docs/ai/api/pydantic_graph/util/)\n    +  [pydantic_graph.exceptions](https://pydantic.dev/docs/ai/api/pydantic_graph/exceptions/)\n\n-
+                \ \n\n**Project**\n\n  *  [Contributing](https://pydantic.dev/docs/ai/project/contributing/)\n  *  [Upgrade
+                Guide](https://pydantic.dev/docs/ai/project/changelog/)\n  *  [Version Policy](https://pydantic.dev/docs/ai/project/version-policy/)\n\n
+                \ \n\n  \n\n**On this page**\n\n-  [Overview](#_top)\n-  [Why use Pydantic AI](#why-use-pydantic-ai)\n-  [Hello
+                World Example](#hello-world-example)\n-  [Tools & Dependency Injection Example](#tools--dependency-injection-example)\n-
+                \ [Instrumentation with Pydantic Logfire](#instrumentation-with-pydantic-logfire)\n-  [llms.txt](#llmstxt)\n-
+                \ [Next Steps](#next-steps)\n\n  \n\n## On this page\n\n-  [Overview](#_top)\n-  [Why use Pydantic AI](#why-use-pydantic-ai)\n-
+                \ [Hello World Example](#hello-world-example)\n-  [Tools & Dependency Injection Example](#tools--dependency-injection-example)\n-
+                \ [Instrumentation with Pydantic Logfire](#instrumentation-with-pydantic-logfire)\n-  [llms.txt](#llmstxt)\n-
+                \ [Next Steps](#next-steps)\n\n  \n\n# Pydantic AI\n\n![Pydantic AI](https://pydantic.dev/docs/ai/img/pydantic-ai-dark.svg)\n\n![Pydantic
+                AI](https://pydantic.dev/docs/ai/img/pydantic-ai-light.svg)\n\n*GenAI Agent Framework, the Pydantic way*\n\n[![CI](https://github.com/pydantic/pydantic-ai/actions/workflows/ci.yml/badge.svg?event=push)](https://github.com/pydantic/pydantic-ai/actions/workflows/ci.yml?query=branch%3Amain)[![Coverage](https://coverage-badge.samuelcolvin.workers.dev/pydantic/pydantic-ai.svg)](https://coverage-badge.samuelcolvin.workers.dev/redirect/pydantic/pydantic-ai)[![PyPI](https://img.shields.io/pypi/v/pydantic-ai.svg)](https://pypi.python.org/pypi/pydantic-ai)[![versions](https://img.shields.io/pypi/pyversions/pydantic-ai.svg)](https://github.com/pydantic/pydantic-ai)[![license](https://img.shields.io/github/license/pydantic/pydantic-ai.svg)](https://github.com/pydantic/pydantic-ai/blob/main/LICENSE)[![Join
+                Slack](https://img.shields.io/badge/Slack-Join%20Slack-4A154B?logo=slack)](https://logfire.pydantic.dev/docs/join-slack/)\n\nPydantic
+                AI is a Python agent framework designed to help you\nquickly, confidently, and painlessly build production
+                grade applications and workflows with Generative AI.\n\nFastAPI revolutionized web development by offering
+                an innovative and ergonomic design, built on the foundation of [Pydantic Validation](https://docs.pydantic.dev)
+                and modern Python features like type hints.\n\nYet despite virtually every Python agent framework and LLM
+                library using Pydantic Validation, when we began to use LLMs in [Pydantic Logfire](https://pydantic.dev/logfire),
+                we couldn't find anything that gave us the same feeling.\n\nWe built Pydantic AI with one simple aim: to bring
+                that FastAPI feeling to GenAI app and agent development.\n\nPydantic AI ships the agent loop, a composable
+                [capabilities](https://pydantic.dev/docs/ai/capabilities/overview) system, and [built-in capabilities](https://pydantic.dev/docs/ai/capabilities/overview#built-in-capabilities)
+                for [thinking](https://pydantic.dev/docs/ai/capabilities/thinking), [web search](https://pydantic.dev/docs/ai/capabilities/web-search),
+                [web fetch](https://pydantic.dev/docs/ai/capabilities/web-fetch), [image generation](https://pydantic.dev/docs/ai/capabilities/image-generation),
+                [MCP](https://pydantic.dev/docs/ai/capabilities/mcp), [tool search](https://pydantic.dev/docs/ai/capabilities/tool-search),
+                and more; [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/) is our official library of ready-made
+                capabilities -- code execution, file access, guardrails, sub-agent orchestration, and more -- that you pick
+                and choose to build coding agents, research assistants, and anything in between.\n\n## Why use Pydantic AI\n\n[#why-use-pydantic-ai](#why-use-pydantic-ai)\n\n1.
+                **Built by the Pydantic Team**: [Pydantic Validation](https://docs.pydantic.dev/latest/) is the validation
+                layer of the OpenAI SDK, the Google ADK, the Anthropic SDK, LangChain, LlamaIndex, AutoGPT, Transformers,
+                CrewAI, Instructor and many more. *Why use the derivative when you can go straight to the source?* \U0001F603\n\n2.
+                **Model-agnostic**:\nSupports virtually every [model](https://pydantic.dev/docs/ai/models/overview) and provider:
+                OpenAI, Anthropic, Gemini, DeepSeek, Grok, Cohere, Mistral, and Perplexity; Azure AI Foundry, Amazon Bedrock,
+                Google Cloud, Ollama, LiteLLM, Groq, OpenRouter, Together AI, Fireworks AI, Cerebras, Hugging Face, GitHub,
+                Heroku, Vercel, Nebius, OVHcloud, Alibaba Cloud, SambaNova, and Z.AI. If your favorite model or provider is
+                not listed, you can easily implement a [custom model](https://pydantic.dev/docs/ai/models/overview#custom-models).\n\n3.
+                **Seamless Observability**:\nTightly [integrates](https://pydantic.dev/docs/ai/integrations/logfire) with
+                [Pydantic Logfire](https://pydantic.dev/logfire), our general-purpose OpenTelemetry observability platform,
+                for real-time debugging, evals-based performance monitoring, and behavior, tracing, and cost tracking. If
+                you already have an observability platform that supports OTel, you can [use that too](https://pydantic.dev/docs/ai/integrations/logfire#alternative-observability-backends).\n\n4.
+                **Fully Type-safe**:\nDesigned to give your IDE or AI coding agent as much context as possible for auto-completion
+                and [type checking](https://pydantic.dev/docs/ai/core-concepts/agent#static-type-checking), moving entire
+                classes of errors from runtime to write-time for a bit of that Rust \"if it compiles, it works\" feel.\n\n5.
+                **Powerful Evals**:\nEnables you to systematically test and [evaluate](https://pydantic.dev/docs/ai/evals/evals)
+                the performance and accuracy of the agentic systems you build, and monitor the performance over time in Pydantic
+                Logfire.\n\n6. **Extensible by Design**:\nBuild agents from composable [capabilities](https://pydantic.dev/docs/ai/capabilities/overview)
+                that bundle tools, hooks, instructions, and model settings into reusable units. Use built-in capabilities
+                for [web search](https://pydantic.dev/docs/ai/capabilities/web-search), [thinking](https://pydantic.dev/docs/ai/capabilities/thinking),
+                and [MCP](https://pydantic.dev/docs/ai/capabilities/mcp), pick from the [Pydantic AI Harness](https://pydantic.dev/docs/ai/harness/)
+                capability library, build your own, or install [third-party capability packages](https://pydantic.dev/docs/ai/guides/extensibility).
+                Define agents entirely in [YAML/JSON](https://pydantic.dev/docs/ai/core-concepts/agent-spec) -- no code required.\n\n7.
+                **MCP and UI**:\nIntegrates the [Model Context Protocol](https://pydantic.dev/docs/ai/mcp/overview) and various
+                [UI event stream](https://pydantic.dev/docs/ai/integrations/ui/overview) standards to give your agent access
+                to external tools and data and build interactive applications with streaming event-based communication.\n\n8.
+                **Human-in-the-Loop Tool Approval**:\nEasily lets you flag that certain tool calls [require approval](https://pydantic.dev/docs/ai/tools-toolsets/deferred-tools#human-in-the-loop-tool-approval)
+                before they can proceed, possibly depending on tool call arguments, conversation history, or user preferences.\n\n9.
+                **Durable Execution**:\nEnables you to build [durable agents](https://pydantic.dev/docs/ai/capabilities/durable_execution/overview)
+                that can preserve their progress across transient API failures and application errors or restarts, and handle
+                long-running, asynchronous, and human-in-the-loop workflows with production-grade reliability.\n\n10. **Streamed
+                Outputs**:\nProvides the ability to [stream](https://pydantic.dev/docs/ai/core-concepts/output#streamed-results)
+                structured output continuously, with immediate validation, ensuring real time access to generated data.\n\n11.
+                **Graph Support**:\nProvides a powerful way to define [graphs](https://pydantic.dev/docs/ai/graph/graph) using
+                type hints, for use in complex applications where standard control flow can degrade to spaghetti code.\n\nRealistically
+                though, no list is going to be as convincing as [giving it a try](#next-steps) and seeing how it makes you
+                feel!\n\n**Sign up for our newsletter, *The Pydantic Stack*, with updates & tutorials on Pydantic AI, Logfire,
+                and Pydantic:**\n\nSubscribe\n\n## Hello World Example\n\n[#hello-world-example](#hello-world-example)\n\nHere's
+                a minimal example of Pydantic AI:\n\n*hello_world.py*\n\n```python\nfrom pydantic_ai import Agent\n\nagent
+                = Agent(  # (1)\n  'anthropic:claude-sonnet-4-6',\n  instructions='Be concise, reply with one sentence.',
+                \ # (2)\n)\n\nresult = agent.run_sync('Where does \"hello world\" come from?')  # (3)\nprint(result.output)\n\"\"\"\nThe
+                first known use of \"hello, world\" was in a 1974 textbook about the C programming language.\n\"\"\"\n```\n\nWe
+                configure the agent to use [Anthropic's Claude Sonnet 4.6](https://pydantic.dev/docs/ai/api/models/anthropic)
+                model, but you can also set the model when running the agent.\n\nRegister static [instructions](https://pydantic.dev/docs/ai/core-concepts/agent#instructions)
+                using a keyword argument to the agent.\n\n[Run the agent](https://pydantic.dev/docs/ai/core-concepts/agent#running-agents)
+                synchronously, starting a conversation with the LLM.\n\n*(This example is complete, it can be run \"as is\",
+                assuming you've [installed the `pydantic_ai` package](https://pydantic.dev/docs/ai/overview/install))*\n\nNo
+                API key yet?\n\nYou don't need a provider API key to try Pydantic AI. Pass the built-in [`'test'` model](https://pydantic.dev/docs/ai/guides/testing#unit-testing-with-testmodel),
+                which runs entirely offline without calling an LLM:\n\n*hello_world_test.py*\n\n```python\nfrom pydantic_ai
+                import Agent\n\nagent = Agent('test')  # (1)\nresult = agent.run_sync('Where does \"hello world\" come from?')\nprint(result.output)\n#>
+                success (no tool calls)\n```\n\n[`TestModel`](https://pydantic.dev/docs/ai/api/models/test/#pydantic_ai.models.test.TestModel)
+                returns canned responses so you can exercise your agent, tools, and outputs without a key.\n\nWhen you're
+                ready to use a real model, see [Models and Providers](https://pydantic.dev/docs/ai/models/overview) to pick
+                a provider and set its API key.\n\nThe exchange will be very short: Pydantic AI will send the instructions
+                and the user prompt to the LLM, and the model will return a text response.\n\nNot very interesting yet, but
+                we can easily add [tools](https://pydantic.dev/docs/ai/tools-toolsets/tools), [dynamic instructions](https://pydantic.dev/docs/ai/core-concepts/agent#instructions),
+                [structured outputs](https://pydantic.dev/docs/ai/core-concepts/output), or composable [capabilities](https://pydantic.dev/docs/ai/capabilities/overview)
+                to build more powerful agents.\n\nHere's the same agent with [thinking](https://pydantic.dev/docs/ai/capabilities/thinking)
+                and [web search](https://pydantic.dev/docs/ai/capabilities/web-search) capabilities:\n\n*hello_world_capabilities.py*\n\n```python\nfrom
+                pydantic_ai import Agent\nfrom pydantic_ai.capabilities import Thinking, WebSearch\n\nagent = Agent(\n    'anthropic:claude-sonnet-4-6',\n
+                \   instructions='Be concise, reply with one sentence.',\n    capabilities=[Thinking(), WebSearch(local='duckduckgo')],\n)\n\nresult
+                = agent.run_sync('What was the mass of the largest meteorite found this year?')\nprint(result.output)\n\"\"\"\nThe
+                largest meteorite recovered this year weighed approximately 7.6 kg, found in the Sahara Desert in January.\n\"\"\"\n```\n\n##
+                Tools & Dependency Injection Example\n\n[#tools--dependency-injection-example](#tools--dependency-injection-example)\n\nHere
+                is a concise example using Pydantic AI to build a support agent for a bank:\n\n*bank_support.py*\n\n```python\nfrom
+                dataclasses import dataclass\n\nfrom pydantic import BaseModel, Field\nfrom pydantic_ai import Agent, RunContext\n\nfrom
+                bank_database import DatabaseConn\n\n@dataclass\nclass SupportDependencies:  # (3)\n  customer_id: int\n  db:
+                DatabaseConn  # (12)\n\nclass SupportOutput(BaseModel):  # (13)\n  support_advice: str = Field(description='Advice
+                returned to the customer')\n  block_card: bool = Field(description=\"Whether to block the customer's card\")\n
+                \ risk: int = Field(description='Risk level of query', ge=0, le=10)\n\nsupport_agent = Agent(  # (1)\n  'openai:gpt-5.2',
+                \ # (2)\n  deps_type=SupportDependencies,\n  output_type=SupportOutput,  # (9)\n  instructions=(  # (4)\n
+                \     'You are a support agent in our bank, give the '\n      'customer support and judge the risk level of
+                their query.'\n  ),\n)\n\n@support_agent.instructions  # (5)\nasync def add_customer_name(ctx: RunContext[SupportDependencies])
+                -> str:\n  customer_name = await ctx.deps.db.customer_name(id=ctx.deps.customer_id)\n  return f\"The customer's
+                name is {customer_name!r}\"\n\n@support_agent.tool  # (6)\nasync def customer_balance(\n  ctx: RunContext[SupportDependencies],
+                include_pending: bool\n) -> float:\n  \"\"\"Returns the customer's current account balance.\"\"\"  # (7)\n
+                \ return await ctx.deps.db.customer_balance(\n      id=ctx.deps.customer_id,\n      include_pending=include_pending,\n
+                \ )\n\n...  # (11)\n\nasync def main():\n  deps = SupportDependencies(customer_id=123, db=DatabaseConn())\n
+                \ result = await support_agent.run('What is my balance?', deps=deps)  # (8)\n  print(result.output)  # (10)\n
+                \ \"\"\"\n  support_advice='Hello John, your current account balance, including pending transactions, is $123.45.'
+                block_card=False risk=1\n  \"\"\"\n\n  result = await support_agent.run('I just lost my card!', deps=deps)\n
+                \ print(result.output)\n  \"\"\"\n  support_advice=\"I'm sorry to hear that, John. We are temporarily blocking
+                your card to prevent unauthorized transactions.\" block_card=True risk=8\n  \"\"\"\n```\n\nThis [agent](https://pydantic.dev/docs/ai/core-concepts/agent)
+                will act as first-tier support in a bank. Agents are generic in the type of dependencies they accept and the
+                type of output they return. In this case, the support agent has type `Agent[SupportDependencies, SupportOutput]`.\n\nHere
+                we configure the agent to use [OpenAI's GPT-5 model](https://pydantic.dev/docs/ai/api/models/openai), you
+                can also set the model when running the agent.\n\nThe `SupportDependencies` dataclass is used to pass data,
+                connections, and logic into the model that will be needed when running [instructions](https://pydantic.dev/docs/ai/core-concepts/agent#instructions)
+                and [tool](https://pydantic.dev/docs/ai/tools-toolsets/tools) functions. Pydantic AI's system of dependency
+                injection provides a [type-safe](https://pydantic.dev/docs/ai/core-concepts/agent#static-type-checking) way
+                to customise the behavior of your agents, and can be especially useful when running [unit tests](https://pydantic.dev/docs/ai/guides/testing)
+                and evals.\n\nStatic [instructions](https://pydantic.dev/docs/ai/core-concepts/agent#instructions) can be
+                registered with the [`instructions` keyword argument](https://pydantic.dev/docs/ai/api/pydantic-ai/agent/#pydantic_ai.agent.Agent.__init__)
+                to the agent.\n\nDynamic [instructions](https://pydantic.dev/docs/ai/core-concepts/agent#instructions) can
+                be registered with the [`@agent.instructions`](https://pydantic.dev/docs/ai/api/pydantic-ai/agent/#pydantic_ai.agent.Agent.instructions)
+                decorator, and can make use of dependency injection. Dependencies are carried via the [`RunContext`](https://pydantic.dev/docs/ai/api/pydantic-ai/tools/#pydantic_ai.tools.RunContext)
+                argument, which is parameterized with the `deps_type` from above. If the type annotation here is wrong, static
+                type checkers will catch it.\n\nThe [`@agent.tool`](https://pydantic.dev/docs/ai/tools-toolsets/tools) decorator
+                let you register functions which the LLM may call while responding to a user. Again, dependencies are carried
+                via [`RunContext`](https://pydantic.dev/docs/ai/api/pydantic-ai/tools/#pydantic_ai.tools.RunContext), any
+                other arguments become the tool schema passed to the LLM. Pydantic is used to validate these arguments, and
+                errors are passed back to the LLM so it can retry.\n\nThe docstring of a tool is also passed to the LLM as
+                the description of the tool. Parameter descriptions are [extracted](https://pydantic.dev/docs/ai/tools-toolsets/tools#function-tools-and-schema)
+                from the docstring and added to the parameter schema sent to the LLM.\n\n[Run the agent](https://pydantic.dev/docs/ai/core-concepts/agent#running-agents)
+                asynchronously, conducting a conversation with the LLM until a final response is reached. Even in this fairly
+                simple case, the agent will exchange multiple messages with the LLM as tools are called to retrieve an output.\n\nThe
+                response from the agent will be guaranteed to be a `SupportOutput`. If validation fails [reflection](https://pydantic.dev/docs/ai/core-concepts/agent#reflection-and-self-correction),
+                the agent is prompted to try again.\n\nThe output will be validated with Pydantic to guarantee it is a `SupportOutput`,
+                since the agent is generic, it'll also be typed as a `SupportOutput` to aid with static type checking.\n\nIn
+                a real use case, you'd add more tools and longer instructions to the agent to extend the context it's equipped
+                with and support it can provide.\n\nThis is a simple sketch of a database connection, used to keep the example
+                short and readable. In reality, you'd be connecting to an external database (e.g. PostgreSQL) to get information
+                about customers.\n\nThis [Pydantic](https://docs.pydantic.dev) model is used to constrain the structured data
+                returned by the agent. From this simple definition, Pydantic builds the JSON Schema that tells the LLM how
+                to return the data, and performs validation to guarantee the data is correct at the end of the run.\n\nComplete
+                `bank_support.py` example\n\nThe code included here is incomplete for the sake of brevity (the definition
+                of `DatabaseConn` is missing); you can find the complete `bank_support.py` example [here](https://pydantic.dev/docs/ai/examples/conversational-agents/bank-support).\n\n##
+                Instrumentation with Pydantic Logfire\n\n[#instrumentation-with-pydantic-logfire](#instrumentation-with-pydantic-logfire)\n\nEven
+                a simple agent with just a handful of tools can result in a lot of back-and-forth with the LLM, making it
+                nearly impossible to be confident of what's going on just from reading the code.\nTo understand the flow of
+                the above runs, we can watch the agent in action using Pydantic Logfire.\n\nTo do this, we need to [set up
+                Logfire](https://pydantic.dev/docs/ai/integrations/logfire#using-logfire), and add the following to our code:\n\n*bank_support_with_logfire.py*\n\n```python\n...\nfrom
+                pydantic_ai import Agent, RunContext\n\nfrom bank_database import DatabaseConn\n\nimport logfire\n\nlogfire.configure()
+                \ # (1)\nlogfire.instrument_pydantic_ai()  # (2)\nlogfire.instrument_sqlite3()  # (3)\n\n...\n\nsupport_agent
+                = Agent(\n  'openai:gpt-5.2',\n  deps_type=SupportDependencies,\n  output_type=SupportOutput,\n  instructions=(\n
+                \     'You are a support agent in our bank, give the '\n      'customer support and judge the risk level of
+                their query.'\n  ),\n)\n```\n\nConfigure the Logfire SDK, this will fail if project is not set up.\n\nThis
+                will instrument all Pydantic AI agents used from here on out. To instrument only a specific agent, add an
+                [`Instrumentation`](https://pydantic.dev/docs/ai/api/pydantic-ai/capabilities/#pydantic_ai.capabilities.Instrumentation)
+                entry to the agent's `capabilities=[...]`.\n\nIn our demo, `DatabaseConn` uses [`sqlite3`](https://docs.python.org/3/library/sqlite3.html#module-sqlite3)
+                to connect to a PostgreSQL database, so [`logfire.instrument_sqlite3()`](https://logfire.pydantic.dev/docs/integrations/databases/sqlite3/)
+                is used to log the database queries.\n\nThat's enough to get the following view of your agent in action:\n\n[https://logfire-eu.pydantic.dev/public-trace/a2957caa-b7b7-4883-a529-777742649004?spanId=31aade41ab896144&amp;embedded=true](https://logfire-eu.pydantic.dev/public-trace/a2957caa-b7b7-4883-a529-777742649004?spanId=31aade41ab896144&amp;embedded=true)\n\n*Logfire
+                instrumentation for the bank agent -- [View in Logfire](https://logfire-eu.pydantic.dev/public-trace/a2957caa-b7b7-4883-a529-777742649004?spanId=31aade41ab896144)*\n\nSee
+                [Monitoring and Performance](https://pydantic.dev/docs/ai/integrations/logfire) to learn more.\n\n## `llms.txt`\n\n[#llmstxt](#llmstxt)\n\nThe
+                Pydantic AI documentation is available in the [llms.txt](https://llmstxt.org/) format.\nThis format is defined
+                in Markdown and suited for LLMs and AI coding assistants and agents.\n\nTwo formats are available:\n\n- [`llms.txt`](https://ai.pydantic.dev/llms.txt):
+                a file containing a brief description\nof the project, along with links to the different sections of the documentation.
+                The structure\nof this file is described in details [here](https://llmstxt.org/#format).\n- [`llms-full.txt`](https://ai.pydantic.dev/llms-full.txt):
+                Similar to the `llms.txt` file,\nbut every link content is included. Note that this file may be too large
+                for some LLMs.\n\nAs of today, these files are not automatically leveraged by IDEs or coding agents, but they
+                will use it if you provide a link or the full text.\n\n## Next Steps\n\n[#next-steps](#next-steps)\n\nTo try
+                Pydantic AI for yourself, [install it](https://pydantic.dev/docs/ai/overview/install) and follow the instructions
+                [in the examples](https://pydantic.dev/docs/ai/examples/setup).\n\nRead the [docs](https://pydantic.dev/docs/ai/core-concepts/agent)
+                to learn more about building applications with Pydantic AI.\n\nRead the [API Reference](https://pydantic.dev/docs/ai/api/pydantic-ai/agent)
+                to understand Pydantic AI's interface.\n\nJoin [Slack](https://logfire.pydantic.dev/docs/join-slack/) or file
+                an issue on [GitHub](https://github.com/pydantic/pydantic-ai/issues) if you have any questions.\n\n Was this
+                page helpful?\n\n  \n\n  \n\n  \n\n  [Next Installation](https://pydantic.dev/docs/ai/overview/install/)\n\n
+                \ \n\n  \n\n  \n\n © Pydantic Services Inc. 2025 to present\n\n [https://github.com/pydantic](https://github.com/pydantic
+                \"Pydantic on GitHub\") [https://x.com/pydantic](https://x.com/pydantic \"Pydantic on X\") [https://www.linkedin.com/company/pydantic/](https://www.linkedin.com/company/pydantic/
+                \"Pydantic on LinkedIn\") [https://bsky.app/profile/pydantic.dev](https://bsky.app/profile/pydantic.dev \"Pydantic
+                on Bluesky\")\n\n  "
+              media_type: text/plain
+              type: text
+            title: Pydantic AI
+            type: document
+          retrieved_at: '2026-07-29T12:53:07.174397'
+          type: web_fetch_result
+          url: https://ai.pydantic.dev
+        tool_use_id: srvtoolu_011jEzBFkzv1q8zxTGXTJVs9
+        type: web_fetch_tool_result
+      - content:
+          abort_reason: null
+          content: []
+          return_code: 0
+          stderr: ''
+          stdout: |
+            Title: Pydantic AI
+          type: code_execution_result
+        tool_use_id: srvtoolu_01Eu8JigguLdNuLC4BieQ7RN
+        type: code_execution_tool_result
+      - text: The page title is **Pydantic AI**.
+        type: text
+      id: msg_011CdWP4STNyz1Ewu16QFSh8
+      model: claude-sonnet-4-6
+      role: assistant
+      stop_details: null
+      stop_reason: end_turn
+      stop_sequence: null
+      type: message
+      usage:
+        cache_creation:
+          ephemeral_1h_input_tokens: 0
+          ephemeral_5m_input_tokens: 0
+        cache_creation_input_tokens: 0
+        cache_read_input_tokens: 0
+        inference_geo: global
+        input_tokens: 10704
+        output_tokens: 142
+        server_tool_use:
+          web_fetch_requests: 1
+          web_search_requests: 0
+        service_tier: standard
+    status:
+      code: 200
+      message: OK
+version: 1

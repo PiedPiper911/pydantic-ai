@@ -344,6 +344,18 @@ result2 = agent.run_sync(  # (3)!
 
 _(This example is complete, it can be run "as is")_
 
+!!! note "What survives a round-trip"
+    `ModelMessagesTypeAdapter` preserves every field, including application-only annotations such
+    as [`TextContent.metadata`][pydantic_ai.messages.TextContent.metadata] that are *not sent to
+    the model*. Because `metadata` is typed `Any`, a JSON round-trip normalizes values with no
+    JSON-native form — a `tuple` reloads as a `list`, a `datetime` as its ISO string — while a
+    `dump_python` → `validate_python` round-trip preserves them exactly. This is the boundary you
+    use to persist and reload history.
+
+    The [UI adapters](ui/overview.md) are different: they convert messages to a foreign wire
+    protocol (Vercel AI, AG-UI) whose message shape has no place for application-only fields, so
+    those fields are dropped entirely. That loss is by design, not a state-loss bug.
+
 ### Loading untrusted history
 
 The `message_history` parameter is trusted server-side state. If you load history that came from a browser request or another untrusted boundary, sanitize it before passing it to the agent.
@@ -364,6 +376,21 @@ result = agent.run_sync('Tell me a different joke.', message_history=message_his
 ```
 
 Each sanitization can be turned off individually when the corresponding parts were created by trusted server-side code: pass `strip_system_prompts=False`, add schemes to `allowed_file_url_schemes`, add values to `allowed_file_url_force_download`, or set `allow_uploaded_files=True`. See [file URL input security](input.md#user-side-download-vs-direct-file-url) for the file input trust model.
+
+## Trust boundary for client-supplied history
+
+Pydantic AI's server-side surfaces are stateless: a run is reconstructed from the `message_history` (and any `deferred_tool_results`) supplied with the request, whether that request arrives through a [UI adapter](ui/overview.md) or through an endpoint you wrote yourself. A client that can submit history can therefore fabricate it — including [`ToolCallPart`][pydantic_ai.messages.ToolCallPart]s the model never emitted and [approvals](deferred-tools.md#human-in-the-loop-tool-approval) no human granted — and the server will process them as genuine, up to and including executing the tools they name.
+
+Pydantic AI does not sign or cryptographically verify tool calls, tool results, or approvals, and neither do comparable agent frameworks: signing is only meaningful for a server that kept the run itself, and such a server doesn't need the client's copy of the history in the first place. The defaults described under [Loading untrusted history](#loading-untrusted-history) and in the [UI adapter trust model](ui/overview.md#trust-model-for-client-submitted-messages) narrow what a fabricated history can reach; they don't make it trustworthy.
+
+Possession of the endpoint is therefore the authorization boundary, so design around that:
+
+- **Authenticate and authorize at the transport layer.** Run the agent inside your own authenticated route handler, and treat every caller that gets through as able to submit any history it likes.
+- **Scope the toolset to the caller.** Expose only the tools the authenticated caller is entitled to use, by [building the toolset per run](toolsets.md#dynamically-building-a-toolset) or [filtering](toolsets.md#filtering-tools) it against the user carried in your [dependencies](dependencies.md).
+- **Re-validate high-stakes effects server-side.** [Approval](deferred-tools.md#human-in-the-loop-tool-approval) guards against the *model* acting without human sign-off, not against the client. Where the stakes demand it, check the caller's authority against server-side state inside the tool function itself, or persist paused runs server-side and resume them with your own `deferred_tool_results` instead of the client's.
+
+!!! note "This is a documented design boundary, not a vulnerability"
+    A report that a client can forge an approval, submit a tool call the model never made, or otherwise rewrite the conversation describes this boundary behaving as designed, and is not a vulnerability in Pydantic AI. What *would* be one is a bypass of a check Pydantic AI actually performs — for instance a sanitization default that fails to strip what it documents as stripped.
 
 ## Other ways of using messages
 

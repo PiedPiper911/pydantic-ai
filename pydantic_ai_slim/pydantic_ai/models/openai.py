@@ -200,7 +200,9 @@ def _map_api_errors(model_name: str) -> Generator[None]:
         yield
     except APIStatusError as e:
         if (status_code := e.status_code) >= 400:
-            raise ModelHTTPError(status_code=status_code, model_name=model_name, body=e.body) from e
+            raise ModelHTTPError(
+                status_code=status_code, model_name=model_name, body=e.body, headers=dict(e.response.headers)
+            ) from e
         raise ModelAPIError(model_name=model_name, message=e.message) from e  # pragma: lax no cover
     except APIConnectionError as e:
         raise ModelAPIError(model_name=model_name, message=e.message) from e
@@ -696,6 +698,29 @@ class OpenAIResponsesModelSettings(OpenAIChatModelSettings, total=False):
     ([`OpenAIModelProfile.openai_responses_supports_reasoning_mode`][pydantic_ai.profiles.openai.OpenAIModelProfile.openai_responses_supports_reasoning_mode]).
 
     See [OpenAI's reasoning mode documentation](https://developers.openai.com/api/docs/guides/reasoning#reasoning-mode)
+    for more details.
+    """
+
+    openai_reasoning_context: Literal['auto', 'current_turn', 'all_turns']
+    """The reasoning context to use, for models that support it.
+
+    Controls which prior-turn reasoning items the model can use when sampling: `auto` defers to the
+    model's own default (OpenAI treats it exactly like not sending the field), `current_turn` makes
+    only the active turn's reasoning available, and `all_turns` renders compatible reasoning items
+    from earlier turns into the next sample (requires access to earlier response items via
+    `previous_response_id`, a conversation, or replayed history).
+
+    When this setting is omitted, Pydantic AI sends `all_turns` on models that support it, so that
+    earlier-turn reasoning stays available by default. Set `auto` explicitly to defer to OpenAI's
+    own per-model default instead.
+
+    `auto` and `current_turn` are sent to any model that supports reasoning. `all_turns` is sent
+    only to models whose profile sets
+    [`OpenAIModelProfile.openai_responses_supports_reasoning_context`][pydantic_ai.profiles.openai.OpenAIModelProfile.openai_responses_supports_reasoning_context]
+    (currently the GPT-5.4, GPT-5.5, and GPT-5.6 families). A value the resolved profile doesn't
+    support is ignored.
+
+    See [OpenAI's reasoning context documentation](https://developers.openai.com/api/docs/guides/reasoning#preserve-reasoning-across-calls)
     for more details.
     """
 
@@ -2009,7 +2034,12 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
             if model_response := _check_azure_content_filter(e, self.system, self.model_name):
                 return model_response
             if (status_code := e.status_code) >= 400:
-                raise ModelHTTPError(status_code=status_code, model_name=self.model_name, body=e.body) from e
+                raise ModelHTTPError(
+                    status_code=status_code,
+                    model_name=self.model_name,
+                    body=e.body,
+                    headers=dict(e.response.headers),
+                ) from e
             raise
         except APIConnectionError as e:  # pragma: no cover
             raise ModelAPIError(model_name=self.model_name, message=e.message) from e
@@ -2107,6 +2137,7 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
 
         if info := self._get_continuation_info(messages, settings):
             response_id, last_sequence_number, previous_model_name = info
+            expected_response_id = response_id
             if last_sequence_number is None:
                 # Some background responses were not previously streamed and have no resumable
                 # sequence cursor. `retrieve(stream=True)` can block for a long time in this case,
@@ -2123,6 +2154,7 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
             )
         else:
             previous_model_name = None
+            expected_response_id = None
             response = await self._responses_create(messages, True, settings, model_request_parameters)
         if isinstance(response, ModelResponse):
             yield _ModelResponseStreamedResponse(
@@ -2136,6 +2168,7 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
                 settings,
                 model_request_parameters,
                 expected_model_name=previous_model_name,
+                expected_response_id=expected_response_id,
             )
             yield sr
 
@@ -2237,7 +2270,12 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
                     ToolCallPart(
                         item.name,
                         item.arguments,
-                        tool_call_id=item.call_id,
+                        tool_call_id=_response_tool_call_id(
+                            item.call_id,
+                            response.id
+                            if self.profile.get('openai_responses_tool_call_ids_are_response_scoped', False)
+                            else None,
+                        ),
                         id=item.id,
                         provider_name=self.system,
                         provider_details=fn_provider_details,
@@ -2345,6 +2383,7 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
         model_request_parameters: ModelRequestParameters,
         *,
         expected_model_name: OpenAIModelName | None = None,
+        expected_response_id: str | None = None,
     ) -> OpenAIResponsesStreamedResponse:
         """Process a streamed response, and prepare a streaming response to return."""
         peekable_response: _utils.PeekableAsyncStream[
@@ -2374,6 +2413,9 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
             background = True
             initial_state = 'suspended'
 
+        tool_call_ids_are_response_scoped = self.profile.get(
+            'openai_responses_tool_call_ids_are_response_scoped', False
+        )
         streamed_response = OpenAIResponsesStreamedResponse(
             model_request_parameters=model_request_parameters,
             _model_name=model_name,
@@ -2382,7 +2424,17 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
             _provider_name=self._provider.name,
             _provider_url=self._provider.base_url,
             _provider_timestamp=provider_timestamp,
+            _tool_call_ids_are_response_scoped=tool_call_ids_are_response_scoped,
         )
+        if tool_call_ids_are_response_scoped:
+            # Response-scoped tool-call IDs are qualified with the response ID as chunks arrive, so the
+            # ID must be known before iteration. This is only needed (and only set eagerly) for the
+            # providers that opt in; other Responses streams keep resolving it during iteration.
+            streamed_response.provider_response_id = (
+                first_chunk.response.id
+                if isinstance(first_chunk, responses.ResponseCreatedEvent)
+                else expected_response_id
+            )
         streamed_response.state = initial_state
         if background:
             # Stamp the background marker up front so the retry-delay gate (and `cancel_suspended_response`)
@@ -2660,6 +2712,7 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
     ) -> Reasoning | Omit:
         reasoning_effort = model_settings.get('openai_reasoning_effort', None)
         reasoning_mode = model_settings.get('openai_reasoning_mode', None)
+        reasoning_context = model_settings.get('openai_reasoning_context', None)
         reasoning_summary = model_settings.get('openai_reasoning_summary', None)
 
         # Fall back to unified thinking when openai_reasoning_effort is not set
@@ -2671,6 +2724,24 @@ class OpenAIResponsesModel(Model[AsyncOpenAI]):
             reasoning['effort'] = reasoning_effort  # type: ignore[typeddict-item]
         if reasoning_mode and self.profile.get('openai_responses_supports_reasoning_mode', False):
             reasoning['mode'] = reasoning_mode
+        if reasoning_context is None:
+            # Default to `all_turns` on models that support it, so earlier-turn reasoning stays
+            # available without opting in — consistent with sending prior thinking (including
+            # "foreign" thinking parts from another model) back to every other model. Models
+            # without `all_turns` support get no `context` at all, never `auto`.
+            if self.profile.get('openai_responses_supports_reasoning_context', False):
+                reasoning['context'] = 'all_turns'
+        else:
+            # Support is per-value, not per-field: every reasoning model accepts `auto` and
+            # `current_turn`, while `all_turns` is limited to the families that persist reasoning
+            # across turns. Gating the whole field on the narrower fact would silently discard a
+            # value the user explicitly set.
+            if reasoning_context == 'all_turns':
+                supports_reasoning_context = self.profile.get('openai_responses_supports_reasoning_context', False)
+            else:
+                supports_reasoning_context = self.profile.get('openai_supports_reasoning', False)
+            if supports_reasoning_context:
+                reasoning['context'] = reasoning_context
         if reasoning_summary:
             reasoning['summary'] = reasoning_summary
         return reasoning or OMIT
@@ -3766,6 +3837,7 @@ class OpenAIResponsesStreamedResponse(StreamedResponse):
     _response: _utils.PeekableAsyncStream[responses.ResponseStreamEvent, AsyncStream[responses.ResponseStreamEvent]]
     _provider_name: str
     _provider_url: str
+    _tool_call_ids_are_response_scoped: bool
     _provider_timestamp: datetime | None = None
     _timestamp: datetime = field(default_factory=_now_utc)
     _has_refusal: bool = field(default=False, init=False)
@@ -3798,7 +3870,9 @@ class OpenAIResponsesStreamedResponse(StreamedResponse):
             _annotations_by_item: dict[str, list[Any]] = {}
             # Track `phase` (commentary | final_answer) on assistant message items, captured
             # from the `output_item.added` event and merged into the corresponding
-            # `TextPart.provider_details` on `output_text.done`.
+            # `TextPart.provider_details` on the first `output_text.delta` (so consumers can
+            # filter commentary from final-answer text as it streams, rather than having to
+            # buffer the whole part), or on `output_text.done` if no delta was received.
             _phase_by_item: dict[str, Literal['commentary', 'final_answer']] = {}
             mcp_list_tools_return_ids: set[str] = set()
 
@@ -3920,7 +3994,10 @@ class OpenAIResponsesStreamedResponse(StreamedResponse):
                             vendor_part_id=chunk.item.id,
                             tool_name=chunk.item.name,
                             args=chunk.item.arguments,
-                            tool_call_id=chunk.item.call_id,
+                            tool_call_id=_response_tool_call_id(
+                                chunk.item.call_id,
+                                self.provider_response_id if self._tool_call_ids_are_response_scoped else None,
+                            ),
                             id=chunk.item.id,
                             provider_name=self.provider_name,
                             provider_details=fn_provider_details,
@@ -4190,11 +4267,17 @@ class OpenAIResponsesStreamedResponse(StreamedResponse):
                 elif isinstance(chunk, responses.ResponseTextDeltaEvent):
                     # Guard against delta=null from OpenAI-compatible gateways (e.g. Bifrost).
                     if chunk.delta is not None:  # pyright: ignore[reportUnnecessaryComparison]
+                        # Pop so the phase rides along with the `PartStartEvent` for the new text part
+                        # and isn't repeated on every subsequent delta.
+                        delta_provider_details: dict[str, Any] | None = None
+                        if (phase := _phase_by_item.pop(chunk.item_id, None)) is not None:
+                            delta_provider_details = {'phase': phase}
                         for event in self._parts_manager.handle_text_delta(
                             vendor_part_id=chunk.item_id,
                             content=chunk.delta,
                             id=chunk.item_id,
                             provider_name=self.provider_name,
+                            provider_details=delta_provider_details,
                         ):
                             yield event
 
@@ -4710,6 +4793,15 @@ def _split_combined_tool_call_id(combined_id: str) -> tuple[str, str | None]:
         return call_id, id
     else:
         return combined_id, None
+
+
+def _response_tool_call_id(tool_call_id: str, response_id: str | None) -> str:
+    """Qualify a Responses tool-call ID with its response ID, or return it unchanged.
+
+    `response_id` is the provider response ID when the model's tool-call IDs are response-scoped (so the
+    ID must be made history-wide unique), or `None` to leave the call ID as-is.
+    """
+    return f'{response_id}:{tool_call_id}' if response_id is not None else tool_call_id
 
 
 def _map_code_interpreter_tool_call(

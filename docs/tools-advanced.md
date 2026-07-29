@@ -671,18 +671,18 @@ Async functions are run on the event loop, while sync functions are offloaded to
 
 By default, sync functions are offloaded to threads using [`anyio.to_thread.run_sync`][anyio.to_thread.run_sync], which creates ephemeral threads on demand. In long-running servers (e.g. FastAPI), these threads can accumulate under sustained traffic, leading to memory growth.
 
-To control thread lifecycle, provide a bounded [`ThreadPoolExecutor`][concurrent.futures.ThreadPoolExecutor] using the [`ThreadExecutor`][pydantic_ai.capabilities.ThreadExecutor] capability (per-agent) or the [`Agent.using_thread_executor()`][pydantic_ai.agent.AbstractAgent.using_thread_executor] context manager (global):
+To control thread lifecycle, provide a bounded [`ThreadPoolExecutor`][concurrent.futures.ThreadPoolExecutor] using the [`UseThreadExecutor`][pydantic_ai.capabilities.UseThreadExecutor] capability (per-agent) or the [`Agent.using_thread_executor()`][pydantic_ai.agent.AbstractAgent.using_thread_executor] context manager (global):
 
 ```python {test="skip"}
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import asynccontextmanager
 
 from pydantic_ai import Agent
-from pydantic_ai.capabilities import ThreadExecutor
+from pydantic_ai.capabilities import UseThreadExecutor
 
 # Per-agent: pass as a capability
 executor = ThreadPoolExecutor(max_workers=16, thread_name_prefix='agent-worker')
-agent = Agent('openai:gpt-5.2', capabilities=[ThreadExecutor(executor)])
+agent = Agent('openai:gpt-5.2', capabilities=[UseThreadExecutor(executor)])
 
 # Global: wrap your server lifespan
 @asynccontextmanager
@@ -809,12 +809,44 @@ To force the local `keywords` algorithm on a provider that natively supports too
     A turn can run on one provider and the next on another (e.g. via [`FallbackModel`][pydantic_ai.models.fallback.FallbackModel] or by switching `model=` between runs). Discovered-tool state is preserved across the switch:
 
     * Local-shape `search_tools` history rendered onto a native-supporting provider (Anthropic, OpenAI) is promoted to the provider's native tool-search wire so the discovered tools' schemas get unlocked from `defer_loading=True` without forcing the model to re-search.
-    * Native-shape `tool_search` history rendered onto a non-supporting provider is translated to the local `search_tools` function-tool exchange shape so the model sees the discoveries as a normal function-call exchange.
+    * Native-shape `tool_search` history rendered onto another provider — whether or not the target has its own native tool search — is translated to the provider-agnostic `search_tools` exchange first, then rendered in the target's supported shape. A provider's own native history retains its exact replay shape.
 
 !!! note "Tool discovery and message history"
     Discovered tools are tracked via metadata in the [message history](message-history.md). If a [history processor](message-history.md#processing-message-history) truncates messages containing discovery metadata, previously discovered tools will require re-discovery.
 
 See [`ToolDefinition.defer_loading`][pydantic_ai.tools.ToolDefinition.defer_loading] and [Deferred Loading](toolsets.md#deferred-loading) for more details.
+
+### Tool search and prompt caching {#tool-search-caching}
+
+Prompt caching keys on a **stable prefix**: providers cache the longest unchanged run of tokens from the start of the request, in roughly the order tool definitions → system/instructions → message history. A change at any layer invalidates the cache for that layer and everything after it — so on most providers **changing, adding, removing, or reordering a tool definition invalidates the cache**, because tool definitions sit at the very front.
+
+Tool search works on **every model**, but it only *preserves* the cache where the model supports native tool search — Anthropic Sonnet 4.5+, Opus 4.5+, and Haiku 4.5+, and OpenAI Responses on GPT-5.4+. There, discovery is [append-only](#tool-search) and the deferred tools never enter the prompt prefix, so an identical prefix is re-read from cache across discovery rounds. On every other model — including Google, and older Anthropic and OpenAI models — the local `search_tools` fallback reveals a discovered tool by adding it to the tools array, which **invalidates the cached prefix from the tool definitions onward on each discovery turn** (on Google, a stable `system_instruction` sits ahead of the tool block and can still be reused — see [Related caching controls](#related-caching-controls) below).
+
+!!! note "Why Gemini tool search never keeps the prefix warm"
+    Native tool search preserves the cache by handing discovery off to a provider-side primitive that keeps the discovered tools out of the request prefix. Gemini's API exposes no such primitive — unlike Anthropic's `bm25`/`regex` tool search or OpenAI Responses' `tool_search` — so tool search on Gemini always falls back to the local `search_tools` function tool, which reveals each match by adding it to the tools array. Because Gemini caches on the request prefix and tool definitions sit at its front, every discovery turn that reveals a new tool invalidates the cache from the tool block onward. This is a missing-primitive limitation, not a version gate: with Anthropic and OpenAI a newer model *does* support native tool search, but no Gemini model does.
+
+!!! note "Deferring saves context — it is not dynamic registration"
+    With either strategy, every tool the model can ever reach must be **declared on the agent or toolset up front**. Deferring keeps unused definitions out of the model's context (and, natively, out of the cached prefix); it does not let you register a brand-new, never-declared tool mid-conversation. Introducing a genuinely new tool changes the tools array, which invalidates the cache from that point on.
+
+For [on-demand capabilities](capabilities/on-demand.md#on-demand-capabilities), loading a capability that reveals no new tool definitions — instructions or model settings only — preserves the cache on every provider, even without native tool search. Revealing a deferred function tool (on a non-native model) or a native tool enters the tool-definitions prefix; so does a deferred `prepare_tools`/`prepare_output_tools` hook that rewrites tool definitions on load. See [Cache implications](capabilities/on-demand.md#cache-implications) for the full breakdown.
+
+For a genuinely open-ended tool universe, route everything through a single, stable tool. The harness [`CodeMode`](https://pydantic.dev/docs/ai/harness/code-mode/) capability collapses many tools into one `run_code` tool whose definition stays byte-stable; newly discovered tools are surfaced as callables inside the sandbox rather than as new tool schemas, keeping the tool-definitions prefix — and its cache — intact across discoveries.
+
+#### Seeing it in a trace
+
+With native tool search the deferred catalog never enters the cached prefix, so an identical request prefix is re-read from cache on the next turn — `cache_read_tokens` stays warm even as the model discovers new tools:
+
+/// public-trace | https://logfire-us.pydantic.dev/public-trace/243f9aa5-dd9d-4de4-a36a-5818611892f1?spanId=28a1621e429ce027
+    title: 'Anthropic: cached tool + system prefix re-read from cache, with deferred tools declared'
+///
+
+Change a single tool definition, and the whole prefix is re-created instead — the [same request with one tool's description edited](https://logfire-us.pydantic.dev/public-trace/c3205dc9-6251-40fa-9d0a-ed647be9ba30?spanId=38ef4635ecaf3e0b) records no cache read.
+
+#### Related caching controls
+
+- Restricting the *active* tools with [`tool_choice`](#tool-choice) can also invalidate the cache when Pydantic AI has to trim the array client-side — see [Prompt caching implications](#tool-choice-caching) for the per-provider breakdown and the cache-preserving alternatives (`allowed_tools`, `allowed_function_names`, `ToolOrOutput`).
+- To place explicit cache breakpoints on messages, use [`CachePoint`][pydantic_ai.messages.CachePoint] (honored by Anthropic, Bedrock, and OpenRouter). Anthropic's tool, system, and instruction caching settings are documented under [Anthropic prompt caching](models/anthropic.md#prompt-caching).
+- On providers that cache tool definitions at the front of the prefix — Anthropic, OpenAI, and xAI — editing a single tool's description invalidates the cached prefix. Google's *implicit* cache is prefix-based on a different layout (its `system_instruction` is a separate field ahead of the tool block), so a large stable system instruction can keep cache hits even when the tool list changes; an explicit [`CachedContent`](models/google.md) instead fixes the tools as an immutable part of the cache by construction.
 
 ## See Also
 

@@ -1783,6 +1783,34 @@ class TestMCPToolsetBackgroundTasks:
             result = await toolset.call_tool('task_optional_tool', {}, run_context, tools['task_optional_tool'])
         assert result == expected
 
+    async def test_process_tool_call_preserves_metadata_and_task_preference(
+        self,
+        task_server: FastMCP[None],
+        run_context: RunContext[None],
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        async def add_metadata(ctx: RunContext[Any], call_tool: Any, name: str, args: dict[str, Any]) -> Any:
+            return await call_tool(name, args, metadata={'trace_id': '123'})
+
+        toolset = MCPToolset(
+            task_server,
+            process_tool_call=add_metadata,
+            use_optional_tasks=False,
+        )
+        direct_call_tool = AsyncMock(return_value='completed')
+        monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
+        tools = await toolset.get_tools(run_context)
+
+        result = await toolset.call_tool('task_optional_tool', {}, run_context, tools['task_optional_tool'])
+
+        assert result == 'completed'
+        direct_call_tool.assert_awaited_once_with(
+            'task_optional_tool',
+            {},
+            metadata={'trace_id': '123'},
+            use_task=False,
+        )
+
     @pytest.mark.parametrize(
         ('source_name', 'target_name', 'expected_use_task'),
         [

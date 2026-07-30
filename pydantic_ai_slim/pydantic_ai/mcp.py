@@ -650,6 +650,8 @@ Allows wrapping an MCP server tool call to customize it, including adding extra 
 metadata.
 """
 
+MCPTaskSupport = Literal['forbidden', 'optional', 'required'] | None
+
 
 MCPToolsetClient: TypeAlias = FastMCPClient[Any] | ClientTransport | FastMCP | FastMCP1Server | AnyUrl | Path | str
 """Anything `MCPToolset` accepts as its `client` argument — a pre-built `fastmcp.Client`, a FastMCP
@@ -665,6 +667,13 @@ _UNSET: Any = object()
 when validating that no kwargs were passed alongside a pre-built `fastmcp.Client`. Using a sentinel
 keeps the conflict checks in sync with the actual default values, so changing a default doesn't
 silently break the conflict check."""
+
+
+@dataclass(kw_only=True)
+class _MCPToolsetTool(ToolsetTool[AgentDepsT]):
+    """An MCP tool carrying its server-declared execution contract outside public metadata."""
+
+    task_support_by_name: dict[str, MCPTaskSupport] | None = None
 
 
 @dataclass(init=False, repr=False)
@@ -806,7 +815,6 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
     _cached_tools: list[mcp_types.Tool] | None
     _cached_resources: list[Resource] | None
     _cached_prompts: list[Prompt] | None
-    _task_support_by_tool_name: dict[str, Literal['forbidden', 'optional', 'required'] | None]
     _running_count: int
     _exit_stack: AsyncExitStack | None
     _user_message_handler: MessageHandlerT | None
@@ -1004,7 +1012,6 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         self._cached_tools = None
         self._cached_resources = None
         self._cached_prompts = None
-        self._task_support_by_tool_name = {}
         self._running_count = 0
         self._exit_stack = None
 
@@ -1077,7 +1084,6 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
 
     def _invalidate_tools_cache(self) -> None:
         self._cached_tools = None
-        self._task_support_by_tool_name = {}
 
     def _invalidate_resources_cache(self) -> None:
         self._cached_resources = None
@@ -1123,7 +1129,6 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
                 self._cached_tools = None
                 self._cached_resources = None
                 self._cached_prompts = None
-                self._task_support_by_tool_name = {}
         return None
 
     async def get_instructions(self, ctx: RunContext[AgentDepsT]) -> messages.InstructionPart | None:
@@ -1155,10 +1160,12 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
         max_retries = self.max_retries if self.max_retries is not None else ctx.max_retries
         tools: dict[str, ToolsetTool[AgentDepsT]] = {}
         mcp_tools = await self.list_tools()
-        task_support_by_tool_name = self._record_task_support(mcp_tools)
+        task_support_by_name: dict[str, MCPTaskSupport] = {
+            mcp_tool.name: mcp_tool.execution.taskSupport if mcp_tool.execution else None for mcp_tool in mcp_tools
+        }
         for mcp_tool in mcp_tools:
-            task_support = task_support_by_tool_name[mcp_tool.name]
-            tools[mcp_tool.name] = ToolsetTool[AgentDepsT](
+            task_support = task_support_by_name[mcp_tool.name]
+            tools[mcp_tool.name] = _MCPToolsetTool[AgentDepsT](
                 toolset=self,
                 tool_def=ToolDefinition(
                     name=mcp_tool.name,
@@ -1174,36 +1181,30 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
                 ),
                 max_retries=max_retries,
                 args_validator=TOOL_SCHEMA_VALIDATOR,
+                task_support_by_name=task_support_by_name,
             )
         return tools
 
-    def _record_task_support(
-        self, mcp_tools: list[mcp_types.Tool]
-    ) -> dict[str, Literal['forbidden', 'optional', 'required'] | None]:
-        task_support_by_tool_name: dict[str, Literal['forbidden', 'optional', 'required'] | None] = {
-            tool.name: tool.execution.taskSupport if tool.execution else None for tool in mcp_tools
-        }
-        # `list_tools()` can own an implicit one-shot session. Only retain declarations while an
-        # explicit outer session remains active, so disconnects cannot leave stale routing state.
-        if self.is_running:
-            self._task_support_by_tool_name = task_support_by_tool_name
-        return task_support_by_tool_name
-
-    async def _get_task_support(self, name: str) -> Literal['forbidden', 'optional', 'required'] | None:
-        if not self.cache_tools or name not in self._task_support_by_tool_name:
-            # A durable tool call may run in a fresh worker that did not perform tool discovery.
-            # Re-read the server declaration rather than relying on preparable `ToolDefinition` metadata.
-            mcp_tools = await self.list_tools()
-            return self._record_task_support(mcp_tools).get(name)
-        return self._task_support_by_tool_name.get(name)
-
-    def tool_for_tool_def(self, tool_def: ToolDefinition) -> ToolsetTool[AgentDepsT]:
-        return ToolsetTool[AgentDepsT](
+    def tool_for_tool_def(
+        self,
+        tool_def: ToolDefinition,
+        *,
+        task_support_by_name: dict[str, MCPTaskSupport] | None = None,
+    ) -> ToolsetTool[AgentDepsT]:
+        return _MCPToolsetTool[AgentDepsT](
             toolset=self,
             tool_def=tool_def,
             max_retries=self.max_retries if self.max_retries is not None else 1,
             args_validator=TOOL_SCHEMA_VALIDATOR,
+            task_support_by_name=task_support_by_name,
         )
+
+    def _task_support_for_tool(self, tool: ToolsetTool[Any]) -> MCPTaskSupport:
+        task_support_by_name = self._task_support_by_name_for_tool(tool)
+        return task_support_by_name.get(tool.tool_def.name) if task_support_by_name is not None else None
+
+    def _task_support_by_name_for_tool(self, tool: ToolsetTool[Any]) -> dict[str, MCPTaskSupport] | None:
+        return tool.task_support_by_name if isinstance(tool, _MCPToolsetTool) else None
 
     async def direct_call_tool(
         self,
@@ -1318,8 +1319,13 @@ class MCPToolset(AbstractToolset[AgentDepsT]):
             *,
             metadata: dict[str, Any] | None = None,
         ) -> ToolResult:
-            task_support = await self._get_task_support(name)
-            use_task = task_support == 'required' or (task_support == 'optional' and self.use_optional_tasks)
+            task_support_by_name = self._task_support_by_name_for_tool(tool)
+            if task_support_by_name is None:
+                # Definitions cached by older durable executions only carried this effective flag.
+                use_task = bool((tool.tool_def.metadata or {}).get('task'))
+            else:
+                task_support = task_support_by_name.get(name)
+                use_task = task_support == 'required' or (task_support == 'optional' and self.use_optional_tasks)
             if metadata is None:
                 return await self.direct_call_tool(name, args, use_task=use_task)
             return await self.direct_call_tool(name, args, metadata=metadata, use_task=use_task)

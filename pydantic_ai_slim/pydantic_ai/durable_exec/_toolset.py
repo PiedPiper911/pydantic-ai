@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 DurableConfig: TypeAlias = Mapping[str, Any]
 ToolConfig: TypeAlias = DurableConfig | Literal[False]
+MCPTaskSupport: TypeAlias = Literal['forbidden', 'optional', 'required'] | None
 Lifecycle: TypeAlias = Literal['enter-outside-durable', 'enter-always', 'enter-never']
 Instructions: TypeAlias = str | InstructionPart | Sequence[str | InstructionPart] | None
 CallToolOperation: TypeAlias = Callable[
@@ -56,6 +57,14 @@ class DynamicToolsResult:
 
     tools: dict[str, DynamicToolInfo]
     instructions: Instructions
+
+
+@dataclass
+class MCPToolsResult:
+    """Serializable MCP tool definitions and their server-declared execution contracts."""
+
+    tool_defs: dict[str, ToolDefinition]
+    task_support: dict[str, MCPTaskSupport]
 
 
 async def get_dynamic_tools(toolset: AbstractToolset[AgentDepsT], ctx: RunContext[AgentDepsT]) -> DynamicToolsResult:
@@ -444,7 +453,8 @@ class DurableMCPToolset(DurableToolsetBase[AgentDepsT]):
         wrapped: MCPToolset[AgentDepsT],
         *,
         in_durable_context: Callable[[], bool],
-        get_tools_operation: Callable[[RunContext[AgentDepsT]], Awaitable[dict[str, ToolDefinition]]] | None,
+        get_tools_operation: Callable[[RunContext[AgentDepsT]], Awaitable[MCPToolsResult | dict[str, ToolDefinition]]]
+        | None,
         get_instructions_operation: Callable[[RunContext[AgentDepsT]], Awaitable[Instructions]] | None,
         call_tool_operation: CallToolOperation,
         resolve_tool_config: ResolveToolConfig,
@@ -470,11 +480,33 @@ class DurableMCPToolset(DurableToolsetBase[AgentDepsT]):
             return await self.wrapped.get_tools(ctx)
         cache_key = self.id or ''
         if self._mcp_toolset.cache_tools and (cached := ctx._mcp_tool_defs_cache.get(cache_key)) is not None:  # pyright: ignore[reportPrivateUsage]
-            return {name: self._mcp_toolset.tool_for_tool_def(tool_def) for name, tool_def in cached.items()}
-        tool_defs = await self._get_tools_operation(ctx)
+            task_support = ctx._mcp_tool_task_support_cache.get(cache_key)  # pyright: ignore[reportPrivateUsage]
+            return {
+                name: self._mcp_toolset.tool_for_tool_def(
+                    tool_def,
+                    task_support_by_name=task_support,
+                )
+                for name, tool_def in cached.items()
+            }
+        result = await self._get_tools_operation(ctx)
+        if isinstance(result, MCPToolsResult):
+            tool_defs = result.tool_defs
+            task_support = result.task_support
+        else:
+            # Decode get-tools results recorded by workers from before task support was carried separately.
+            tool_defs = result
+            task_support = None
         if self._mcp_toolset.cache_tools:
             ctx._mcp_tool_defs_cache[cache_key] = tool_defs  # pyright: ignore[reportPrivateUsage]
-        return {name: self._mcp_toolset.tool_for_tool_def(tool_def) for name, tool_def in tool_defs.items()}
+            if task_support is not None:
+                ctx._mcp_tool_task_support_cache[cache_key] = task_support  # pyright: ignore[reportPrivateUsage]
+        return {
+            name: self._mcp_toolset.tool_for_tool_def(
+                tool_def,
+                task_support_by_name=task_support,
+            )
+            for name, tool_def in tool_defs.items()
+        }
 
     async def get_instructions(self, ctx: RunContext[AgentDepsT]) -> Instructions:
         if not self._mcp_toolset.include_instructions:

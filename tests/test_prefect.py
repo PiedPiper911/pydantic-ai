@@ -773,6 +773,29 @@ async def test_prefect_toolset_legacy_constructors() -> None:
     assert wrapped_mcp.id is None
 
 
+async def test_prefect_mcptoolset_transports_task_support() -> None:
+    agent = PrefectAgent(  # pyright: ignore[reportDeprecated]
+        Agent(
+            TestModel(call_tools=['required_task_tool', 'optional_task_tool']),
+            name='mcp_task_prefect_agent',
+            toolsets=[
+                MCPToolset(
+                    StdioTransport(command='python', args=['-m', 'tests.mcp_task_server']),
+                    id='mcp_tasks',
+                    init_timeout=20,
+                    use_optional_tasks=False,
+                )
+            ],
+        )
+    )
+
+    @flow(name='test_prefect_mcptoolset_transports_task_support')
+    async def run_agent() -> str:
+        return (await agent.run('Call both tools')).output
+
+    assert await run_agent() == '{"required_task_tool":"required_completed","optional_task_tool":"optional_sync"}'
+
+
 async def test_capability_contributed_toolset_id_from_capability():
     """A capability's `id` flows to its contributed leaf toolset, so a capability combined with a
     local MCP server is swapped for its Prefect task wrapper under a stable id. An `MCP` with no
@@ -1672,6 +1695,7 @@ def test_cache_key_run_context_projection_is_exhaustive():
         'model_settings',  # hashed via the model request inputs, not RunContext
         'capability_loaded',  # transient per-hook flag; `None` during tool execution
         '_mcp_tool_defs_cache',  # live per-run memo of MCP tool defs, reconstructed from messages
+        '_mcp_tool_task_support_cache',  # paired live MCP execution-contract memo
         '_event_stream_buffer',  # live per-run event buffer drained in workflow code, not a tool-execution input
     }
     ctx = RunContext(deps=None, model=TestModel(), usage=RunUsage())

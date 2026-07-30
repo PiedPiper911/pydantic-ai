@@ -2046,11 +2046,84 @@ async def test_dbos_mcptoolset_returns_cached_tool_defs(dbos: DBOS):
     run_context._mcp_tool_defs_cache['cache_return_test'] = {  # pyright: ignore[reportPrivateUsage]
         'foo': ToolDefinition(name='foo', parameters_json_schema={'type': 'object'}),
     }
+    run_context._mcp_tool_task_support_cache['cache_return_test'] = {  # pyright: ignore[reportPrivateUsage]
+        'foo': 'optional'
+    }
 
     tools = await wrapper.get_tools(run_context)
     assert list(tools.keys()) == ['foo']
-    # Returned ToolsetTool wraps the cached `ToolDefinition` via `tool_for_tool_def` on the wrapped MCPToolset.
+    # The durable cache reconstructs both the public definition and the separately carried execution contract.
     assert tools['foo'].tool_def.name == 'foo'
+    assert inner._task_support_for_tool(tools['foo']) == 'optional'  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_dbos_mcptoolset_legacy_cache_preserves_unknown_task_support(dbos: DBOS):
+    """A cache recorded before execution contracts were separated still uses its effective metadata."""
+    inner = MCPToolset('https://example.com/mcp', id='legacy_cache_test')
+    wrapper = dbosify_mcp_toolset(inner, step_name_prefix='legacy_cache_test', step_config={})
+    run_context = RunContext(deps=None, model=TestModel(), usage=RunUsage())
+    run_context._mcp_tool_defs_cache['legacy_cache_test'] = {  # pyright: ignore[reportPrivateUsage]
+        'foo': ToolDefinition(name='foo', metadata={'task': True}),
+    }
+
+    tools = await wrapper.get_tools(run_context)
+
+    assert inner._task_support_by_name_for_tool(tools['foo']) is None  # pyright: ignore[reportPrivateUsage]
+
+
+async def test_dbos_mcptoolset_accepts_legacy_get_tools_result(dbos: DBOS, monkeypatch: pytest.MonkeyPatch):
+    """A recorded pre-upgrade get-tools result retains its old effective task routing."""
+    inner = MCPToolset('https://example.com/mcp', id='legacy_result_test')
+    wrapper = dbosify_mcp_toolset(inner, step_name_prefix='legacy_result_test', step_config={})
+    run_context = RunContext(deps=None, model=TestModel(), usage=RunUsage())
+
+    async def legacy_get_tools(ctx: RunContext[object]) -> dict[str, ToolDefinition]:
+        return {'foo': ToolDefinition(name='foo', metadata={'task': True})}
+
+    wrapper._get_tools_operation = legacy_get_tools  # pyright: ignore[reportPrivateUsage]
+    tools = await wrapper.get_tools(run_context)
+
+    assert run_context._mcp_tool_defs_cache['legacy_result_test']['foo'].name == 'foo'  # pyright: ignore[reportPrivateUsage]
+    assert 'legacy_result_test' not in run_context._mcp_tool_task_support_cache  # pyright: ignore[reportPrivateUsage]
+    calls: list[tuple[str, bool]] = []
+
+    async def direct_call_tool(
+        name: str,
+        tool_args: dict[str, Any],
+        *,
+        metadata: dict[str, Any] | None = None,
+        use_task: bool = False,
+    ) -> str:
+        calls.append((name, use_task))
+        return 'completed'
+
+    monkeypatch.setattr(inner, 'direct_call_tool', direct_call_tool)
+    result = await inner.call_tool('foo', {}, run_context, tools['foo'])
+
+    assert result == 'completed'
+    assert calls == [('foo', True)]
+
+
+_mcp_task_dbos_agent = DBOSAgent(  # pyright: ignore[reportDeprecated]
+    Agent(
+        TestModel(call_tools=['required_task_tool', 'optional_task_tool']),
+        name='mcp_task_dbos_agent',
+        toolsets=[
+            MCPToolset(
+                StdioTransport(command='python', args=['-m', 'tests.mcp_task_server']),
+                id='mcp_tasks',
+                init_timeout=20,
+                use_optional_tasks=False,
+            )
+        ],
+    )
+)
+
+
+async def test_dbos_mcptoolset_transports_task_support(dbos: DBOS):
+    result = await _mcp_task_dbos_agent.run('Call both tools')
+
+    assert result.output == '{"required_task_tool":"required_completed","optional_task_tool":"optional_sync"}'
 
 
 def _call_mcp_then_finish(messages: list[ModelMessage], info: AgentInfo) -> ModelResponse:

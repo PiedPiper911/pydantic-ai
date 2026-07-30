@@ -9,6 +9,8 @@ from pydantic_ai import ToolsetTool
 from pydantic_ai.durable_exec._toolset import (
     CallToolResult,
     DurableMCPToolset,
+    MCPTaskSupport,
+    MCPToolsResult,
     unwrap_recorded_tool_call_result,
     wrap_tool_call_result,
 )
@@ -25,8 +27,15 @@ def dbosify_mcp_toolset(
     name = f'{step_name_prefix}__mcp_server{id_suffix}'
 
     @DBOS.step(name=f'{name}.get_tools', **(step_config or {}))
-    async def get_tools_step(ctx: RunContext[AgentDepsT]) -> dict[str, ToolDefinition]:
-        return {tool_name: tool.tool_def for tool_name, tool in (await wrapped.get_tools(ctx)).items()}
+    async def get_tools_step(ctx: RunContext[AgentDepsT]) -> MCPToolsResult | dict[str, ToolDefinition]:
+        tools = await wrapped.get_tools(ctx)
+        return MCPToolsResult(
+            tool_defs={tool_name: tool.tool_def for tool_name, tool in tools.items()},
+            task_support={
+                tool_name: wrapped._task_support_for_tool(tool)  # pyright: ignore[reportPrivateUsage]
+                for tool_name, tool in tools.items()
+            },
+        )
 
     @DBOS.step(name=f'{name}.get_instructions', **(step_config or {}))
     async def get_instructions_step(ctx: RunContext[AgentDepsT]):
@@ -39,10 +48,12 @@ def dbosify_mcp_toolset(
         tool_args: dict[str, Any],
         ctx: RunContext[AgentDepsT],
         tool: ToolsetTool[AgentDepsT],
+        task_support_by_name: dict[str, MCPTaskSupport] | None = None,
     ) -> CallToolResult:
         # The context is guarded because a `process_tool_call=` hook receives it and could enqueue.
         # DBOS has no selective non-retryable-exception support, so control-flow
         # exceptions must cross the step boundary as successful values.
+        tool = wrapped.tool_for_tool_def(tool.tool_def, task_support_by_name=task_support_by_name)
         return await wrap_tool_call_result(
             wrapped.call_tool(tool_name, tool_args, guard_enqueue_in_workflow(ctx), tool)
         )
@@ -56,7 +67,10 @@ def dbosify_mcp_toolset(
     ) -> ToolResult:
         # A recovering workflow may replay outputs this step recorded before it wrapped
         # control-flow exceptions as values; those recordings are the raw tool result.
-        return unwrap_recorded_tool_call_result(await call_tool_step(tool_name, tool_args, ctx, tool))
+        task_support_by_name = wrapped._task_support_by_name_for_tool(tool)  # pyright: ignore[reportPrivateUsage]
+        return unwrap_recorded_tool_call_result(
+            await call_tool_step(tool_name, tool_args, ctx, tool, task_support_by_name)
+        )
 
     return DurableMCPToolset(
         wrapped,

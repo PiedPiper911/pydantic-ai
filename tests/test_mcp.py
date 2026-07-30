@@ -1658,67 +1658,63 @@ class TestMCPToolsetBackgroundTasks:
         ('task_support', 'expected_use_task'),
         [('required', True), ('optional', False), ('forbidden', False), (None, False)],
     )
-    async def test_task_support_is_rediscovered_for_reconstructed_tool_definition(
+    async def test_reconstructed_tool_definition_uses_separately_carried_task_support(
         self,
         run_context: RunContext[None],
         monkeypatch: pytest.MonkeyPatch,
         task_support: Literal['required', 'optional', 'forbidden'] | None,
         expected_use_task: bool,
     ) -> None:
-        """A fresh durable worker receives a prepared tool definition but can rediscover routing state."""
+        """Durable workers route from serialized state without another `tools/list` request."""
         toolset = MCPToolset('https://example.com/mcp', use_optional_tasks=False)
-        execution = mcp_types.ToolExecution(taskSupport=task_support) if task_support is not None else None
-        monkeypatch.setattr(
-            toolset,
-            'list_tools',
-            AsyncMock(
-                return_value=[mcp_types.Tool(name='durable_tool', inputSchema={'type': 'object'}, execution=execution)]
-            ),
-        )
+        list_tools = AsyncMock(side_effect=AssertionError('tool discovery should not run'))
+        monkeypatch.setattr(toolset, 'list_tools', list_tools)
         direct_call_tool = AsyncMock(return_value='completed')
         monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
-        tool = toolset.tool_for_tool_def(ToolDefinition(name='durable_tool', metadata={}))
+        tool = toolset.tool_for_tool_def(
+            ToolDefinition(name='durable_tool', metadata={}),
+            task_support_by_name={'durable_tool': task_support},
+        )
+
+        result = await toolset.call_tool('durable_tool', {}, run_context, tool)
+
+        assert result == 'completed'
+        list_tools.assert_not_awaited()
+        direct_call_tool.assert_awaited_once_with('durable_tool', {}, use_task=expected_use_task)
+
+    @pytest.mark.parametrize(('legacy_task', 'expected_use_task'), [(True, True), (False, False)])
+    async def test_legacy_durable_definition_uses_effective_task_metadata(
+        self,
+        run_context: RunContext[None],
+        monkeypatch: pytest.MonkeyPatch,
+        legacy_task: bool,
+        expected_use_task: bool,
+    ) -> None:
+        toolset = MCPToolset('https://example.com/mcp', use_optional_tasks=False)
+        direct_call_tool = AsyncMock(return_value='completed')
+        monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
+        tool = toolset.tool_for_tool_def(ToolDefinition(name='durable_tool', metadata={'task': legacy_task}))
 
         result = await toolset.call_tool('durable_tool', {}, run_context, tool)
 
         assert result == 'completed'
         direct_call_tool.assert_awaited_once_with('durable_tool', {}, use_task=expected_use_task)
 
-    async def test_task_support_is_not_retained_after_implicit_session(
-        self, task_server: FastMCP[None], run_context: RunContext[None]
-    ) -> None:
-        toolset = MCPToolset(task_server)
-
-        await toolset.get_tools(run_context)
-
-        assert toolset.is_running is False
-        assert toolset._task_support_by_tool_name == {}  # pyright: ignore[reportPrivateUsage]
-
-    async def test_disabling_tool_cache_refreshes_task_support(
+    async def test_legacy_durable_redirect_preserves_source_effective_task_metadata(
         self, run_context: RunContext[None], monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        toolset = MCPToolset('https://example.com/mcp', use_optional_tasks=False, cache_tools=False)
-        optional_tool = mcp_types.Tool(
-            name='durable_tool',
-            inputSchema={'type': 'object'},
-            execution=mcp_types.ToolExecution(taskSupport='optional'),
-        )
-        required_tool = mcp_types.Tool(
-            name='durable_tool',
-            inputSchema={'type': 'object'},
-            execution=mcp_types.ToolExecution(taskSupport='required'),
-        )
-        list_tools = AsyncMock(side_effect=[[optional_tool], [required_tool]])
-        monkeypatch.setattr(toolset, 'list_tools', list_tools)
+        async def redirect(ctx: RunContext[Any], call_tool: Any, name: str, args: dict[str, Any]) -> Any:
+            return await call_tool('redirected_tool', args)
+
+        toolset = MCPToolset('https://example.com/mcp', process_tool_call=redirect)
         direct_call_tool = AsyncMock(return_value='completed')
         monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
-        tool = toolset.tool_for_tool_def(ToolDefinition(name='durable_tool'))
+        tool = toolset.tool_for_tool_def(ToolDefinition(name='durable_tool', metadata={'task': True}))
 
-        await toolset.call_tool('durable_tool', {}, run_context, tool)
-        await toolset.call_tool('durable_tool', {}, run_context, tool)
+        result = await toolset.call_tool('durable_tool', {}, run_context, tool)
 
-        assert list_tools.await_count == 2
-        assert [call.kwargs['use_task'] for call in direct_call_tool.await_args_list] == [False, True]
+        assert result == 'completed'
+        direct_call_tool.assert_awaited_once_with('redirected_tool', {}, use_task=True)
 
     async def test_forbidden_tool_stays_on_sync_path(
         self, task_server: FastMCP[None], run_context: RunContext[None]
@@ -1737,6 +1733,19 @@ class TestMCPToolsetBackgroundTasks:
         toolset = MCPToolset(task_server)
         async with toolset:
             tools = await toolset.get_tools(run_context)
+            result = await toolset.call_tool('plain_tool', {}, run_context, tools['plain_tool'])
+        assert result == 'plain_completed'
+
+    async def test_plain_tool_ignores_modified_public_task_metadata(
+        self, task_server: FastMCP[None], run_context: RunContext[None]
+    ) -> None:
+        """Known absent task support is distinct from a legacy definition whose contract is unknown."""
+        toolset = MCPToolset(task_server)
+        async with toolset:
+            tools = await toolset.get_tools(run_context)
+            metadata = tools['plain_tool'].tool_def.metadata
+            assert metadata is not None
+            metadata['task'] = True
             result = await toolset.call_tool('plain_tool', {}, run_context, tools['plain_tool'])
         assert result == 'plain_completed'
 
@@ -1773,6 +1782,52 @@ class TestMCPToolsetBackgroundTasks:
             tools = await toolset.get_tools(run_context)
             result = await toolset.call_tool('task_optional_tool', {}, run_context, tools['task_optional_tool'])
         assert result == expected
+
+    @pytest.mark.parametrize(
+        ('source_name', 'target_name', 'expected_use_task'),
+        [
+            ('optional_tool', 'required_tool', True),
+            ('required_tool', 'forbidden_tool', False),
+        ],
+    )
+    async def test_process_tool_call_redirect_uses_target_execution_contract(
+        self,
+        run_context: RunContext[None],
+        monkeypatch: pytest.MonkeyPatch,
+        source_name: str,
+        target_name: str,
+        expected_use_task: bool,
+    ) -> None:
+        async def redirect(ctx: RunContext[Any], call_tool: Any, name: str, args: dict[str, Any]) -> Any:
+            return await call_tool(target_name, args)
+
+        toolset = MCPToolset(
+            'https://example.com/mcp',
+            process_tool_call=redirect,
+            use_optional_tasks=False,
+        )
+        monkeypatch.setattr(
+            toolset,
+            'list_tools',
+            AsyncMock(
+                return_value=[
+                    mcp_types.Tool(
+                        name=f'{task_support}_tool',
+                        inputSchema={'type': 'object'},
+                        execution=mcp_types.ToolExecution(taskSupport=task_support),
+                    )
+                    for task_support in ('optional', 'required', 'forbidden')
+                ]
+            ),
+        )
+        direct_call_tool = AsyncMock(return_value='completed')
+        monkeypatch.setattr(toolset, 'direct_call_tool', direct_call_tool)
+        tools = await toolset.get_tools(run_context)
+
+        result = await toolset.call_tool(source_name, {}, run_context, tools[source_name])
+
+        assert result == 'completed'
+        direct_call_tool.assert_awaited_once_with(target_name, {}, use_task=expected_use_task)
 
     async def test_process_tool_call_can_short_circuit_before_task_discovery(
         self, run_context: RunContext[None], monkeypatch: pytest.MonkeyPatch

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Literal, cast
 
+from pydantic import ConfigDict, with_config
 from temporalio import activity, workflow
 from temporalio.workflow import ActivityConfig
 
@@ -10,6 +12,8 @@ from pydantic_ai import ToolsetTool
 from pydantic_ai.durable_exec._toolset import (
     CallToolResult,
     DurableMCPToolset,
+    MCPTaskSupport,
+    MCPToolsResult,
     ToolConfig,
     unwrap_tool_call_result,
     wrap_tool_call_result,
@@ -20,10 +24,22 @@ from pydantic_ai.messages import InstructionPart
 from pydantic_ai.tools import AgentDepsT, RunContext, ToolDefinition
 
 from ._run_context import TemporalRunContext, deserialize_run_context
-from ._toolset import CallToolParams, GetToolsParams, resolve_tool_activity_config
+from ._toolset import GetToolsParams, resolve_tool_activity_config
 
 if TYPE_CHECKING:
     from pydantic_ai.agent.abstract import AbstractAgent
+
+
+@dataclass
+@with_config(ConfigDict(arbitrary_types_allowed=True))
+class CallMCPToolParams:
+    """Serializable MCP call inputs, including the separately carried execution contract."""
+
+    name: str
+    tool_args: dict[str, Any]
+    serialized_run_context: Any
+    tool_def: ToolDefinition
+    task_support_by_name: dict[str, MCPTaskSupport] | None = None
 
 
 def temporalize_mcp_toolset(
@@ -43,9 +59,18 @@ def temporalize_mcp_toolset(
                 'but MCP tools require the use of IO and so cannot be run outside of an activity.'
             )
 
-    async def get_tools_activity(params: GetToolsParams, deps: AgentDepsT) -> dict[str, ToolDefinition]:
+    async def get_tools_activity(
+        params: GetToolsParams, deps: AgentDepsT
+    ) -> MCPToolsResult | dict[str, ToolDefinition]:
         ctx = deserialize_run_context(run_context_type, params.serialized_run_context, deps=deps, agent=agent)
-        return {name: tool.tool_def for name, tool in (await toolset.get_tools(ctx)).items()}
+        tools = await toolset.get_tools(ctx)
+        return MCPToolsResult(
+            tool_defs={name: tool.tool_def for name, tool in tools.items()},
+            task_support={
+                name: toolset._task_support_for_tool(tool)  # pyright: ignore[reportPrivateUsage]
+                for name, tool in tools.items()
+            },
+        )
 
     async def get_instructions_activity(
         params: GetToolsParams, deps: AgentDepsT
@@ -54,12 +79,10 @@ def temporalize_mcp_toolset(
         async with toolset:
             return await toolset.get_instructions(ctx)
 
-    async def call_tool_activity(params: CallToolParams, deps: AgentDepsT) -> CallToolResult:
+    async def call_tool_activity(params: CallMCPToolParams, deps: AgentDepsT) -> CallToolResult:
         ctx = deserialize_run_context(run_context_type, params.serialized_run_context, deps=deps, agent=agent)
-        assert isinstance(params.tool_def, ToolDefinition)
-        return await wrap_tool_call_result(
-            toolset.call_tool(params.name, params.tool_args, ctx, toolset.tool_for_tool_def(params.tool_def))
-        )
+        tool = toolset.tool_for_tool_def(params.tool_def, task_support_by_name=params.task_support_by_name)
+        return await wrap_tool_call_result(toolset.call_tool(params.name, params.tool_args, ctx, tool))
 
     for activity_func in (get_tools_activity, get_instructions_activity, call_tool_activity):
         activity_func.__annotations__['deps'] = deps_type
@@ -83,7 +106,9 @@ def temporalize_mcp_toolset(
             )
         return config
 
-    async def get_tools_operation(ctx: RunContext[AgentDepsT]) -> dict[str, ToolDefinition]:
+    async def get_tools_operation(
+        ctx: RunContext[AgentDepsT],
+    ) -> MCPToolsResult | dict[str, ToolDefinition]:
         config: ActivityConfig = {'summary': f'get tools: {toolset.id}', **activity_config}
         return await workflow.execute_activity(
             activity=get_tools_activity_def,
@@ -115,11 +140,12 @@ def temporalize_mcp_toolset(
         result = await workflow.execute_activity(
             activity=call_tool_activity_def,
             args=[
-                CallToolParams(
+                CallMCPToolParams(
                     name=name,
                     tool_args=tool_args,
                     serialized_run_context=run_context_type.serialize_run_context(ctx),
                     tool_def=tool.tool_def,
+                    task_support_by_name=toolset._task_support_by_name_for_tool(tool),  # pyright: ignore[reportPrivateUsage]
                 ),
                 ctx.deps,
             ],

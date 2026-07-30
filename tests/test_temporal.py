@@ -3949,6 +3949,7 @@ def test_temporal_run_context_serialization_is_exhaustive():
         'conversation_id',  # not currently exposed inside activities
         'model_settings',  # not currently exposed inside activities
         '_mcp_tool_defs_cache',  # run-local cache read/written in workflow code; never needed inside an activity
+        '_mcp_tool_task_support_cache',  # paired run-local MCP execution-contract cache
         '_event_stream_buffer',  # run-local event buffer drained in workflow code; a public emit surface for activities is a follow-up
     }
     ctx = RunContext(deps=None, model=TestModel(), usage=RunUsage())
@@ -4094,6 +4095,48 @@ async def test_mcptoolset_in_temporal_workflow(allow_model_requests: None, clien
             task_queue=TASK_QUEUE,
         )
         assert 'pydantic' in output.lower() or 'agent' in output.lower()
+
+
+_mcp_task_agent = Agent(
+    TestModel(call_tools=['required_task_tool', 'optional_task_tool']),
+    name='mcp_task_temporal_agent',
+    toolsets=[
+        MCPToolset(
+            StdioTransport(command='python', args=['-m', 'tests.mcp_task_server']),
+            id='mcp_tasks',
+            init_timeout=20,
+            use_optional_tasks=False,
+        )
+    ],
+)
+_mcp_task_temporal_agent = TemporalAgent(  # pyright: ignore[reportDeprecated]
+    _mcp_task_agent,
+    activity_config=BASE_ACTIVITY_CONFIG,
+)
+
+
+@workflow.defn
+class MCPTaskSupportWorkflow:
+    @workflow.run
+    async def run(self, prompt: str) -> str:
+        return (await _mcp_task_temporal_agent.run(prompt)).output
+
+
+async def test_temporal_mcptoolset_transports_task_support(client: Client):
+    async with Worker(
+        client,
+        task_queue=TASK_QUEUE,
+        workflows=[MCPTaskSupportWorkflow],
+        plugins=[AgentPlugin(_mcp_task_temporal_agent)],
+    ):
+        output = await client.execute_workflow(
+            MCPTaskSupportWorkflow.run,
+            args=['Call both tools'],
+            id=MCPTaskSupportWorkflow.__name__,
+            task_queue=TASK_QUEUE,
+        )
+
+    assert output == '{"required_task_tool":"required_completed","optional_task_tool":"optional_sync"}'
 
 
 # ============================================================================

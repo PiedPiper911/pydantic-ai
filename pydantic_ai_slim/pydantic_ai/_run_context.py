@@ -5,7 +5,7 @@ from collections.abc import Generator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import field
-from typing import TYPE_CHECKING, Any, Generic
+from typing import TYPE_CHECKING, Any, Generic, Literal
 
 from opentelemetry.trace import NoOpTracer, Tracer
 from typing_extensions import TypeVar
@@ -145,6 +145,11 @@ class RunContext(Generic[RunContextAgentDepsT]):
     the process-shared toolset instance, so whether a wrapper schedules its `get_tools` activity/step
     depends only on the run's own history and stays replay-deterministic.
     """
+
+    _mcp_tool_task_support_cache: dict[str, dict[str, Literal['forbidden', 'optional', 'required'] | None]] = field(
+        default_factory=lambda: {}, repr=False
+    )
+    """Private implementation detail paired with `_mcp_tool_defs_cache`; do not read or write."""
 
     tool_manager: ToolManager[RunContextAgentDepsT] | None = None
     """The tool manager for the current run step.

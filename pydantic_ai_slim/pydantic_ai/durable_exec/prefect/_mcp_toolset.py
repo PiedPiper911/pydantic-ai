@@ -12,6 +12,7 @@ from pydantic_ai._warnings import PydanticAIDeprecationWarning
 from pydantic_ai.durable_exec._toolset import (
     CallToolOperation,
     DurableMCPToolset,
+    MCPTaskSupport,
     unwrap_recorded_tool_call_result,
     wrap_tool_call_result,
 )
@@ -31,9 +32,11 @@ def _call_tool_operation(wrapped: MCPToolset[AgentDepsT], base_config: TaskConfi
         tool_args: dict[str, Any],
         ctx: RunContext[AgentDepsT],
         tool: ToolsetTool[AgentDepsT],
+        task_support_by_name: dict[str, MCPTaskSupport] | None = None,
     ) -> Any:
         # The context is guarded because a `process_tool_call=` hook receives it and could enqueue.
         task_ctx = guard_task_enqueue(ctx)
+        tool = wrapped.tool_for_tool_def(tool.tool_def, task_support_by_name=task_support_by_name)
         return await wrap_tool_call_result(wrapped.call_tool(tool_name, tool_args, task_ctx, tool))
 
     async def call_tool_operation(
@@ -44,8 +47,9 @@ def _call_tool_operation(wrapped: MCPToolset[AgentDepsT], base_config: TaskConfi
         config: Mapping[str, Any],
     ) -> ToolResult:
         task_config = with_non_retryable_errors(base_config)
+        task_support_by_name = wrapped._task_support_by_name_for_tool(tool)  # pyright: ignore[reportPrivateUsage]
         result = await call_tool_task.with_options(name=f'Call MCP Tool: {name}', **task_config)(
-            name, tool_args, ctx, tool
+            name, tool_args, ctx, tool, task_support_by_name
         )
         # A persisted cache entry written before this task wrapped control-flow exceptions (still
         # reachable under a custom `cache_policy` that omits `TASK_SOURCE`) holds the raw result.
